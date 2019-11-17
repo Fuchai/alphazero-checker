@@ -12,7 +12,7 @@ class TestAlphaBetaNode(TestCase):
                                [0, 0, 0, 0, 0, 0, 0, 0],
                                [-1, 0, 0, 0, 0, 0, -1, 0],
                                [0, 0, 0, 0, 0, 0, 0, 0]])
-        state=State(fake_board, False)
+        state=CheckerState(fake_board, False)
         alpha=AlphaNode(state)
         val=alpha.evaluate()
 
