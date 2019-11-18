@@ -149,4 +149,4 @@ def main_example_2():
 
 
 if __name__ == '__main__':
-    main_example_1()
+    main_example_2()
