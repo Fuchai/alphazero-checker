@@ -4,7 +4,7 @@ class PermaTree:
     def __init__(self,root):
         self.root=root
 
-    def go():
+    def go(self):
         self.root.run()
 
     def choose(state):
@@ -26,8 +26,8 @@ class Edge():
         self.prior_probability=prior_probability
 
 class State():
-    def __init__(self,board):
-        self.board=board
+    def __init__(self,checker_state):
+        self.checker_state=checker_state
         # adjacency list implementation
         # every element in self.edges is a Edge object
         self.edges=[] # call get_legal_actions from checker
@@ -39,8 +39,11 @@ class State():
             # or self.edges+[pack_action_into_edge(action)]
             # another append syntax
 
-    def pack_action_into_edge(action):
+    def pack_action_into_edge(self,action):
         return Edge(self,action)
+
+    def get_board(self):
+        return self.checker_state.board
 
 
 # tree search does not check same state
@@ -52,7 +55,7 @@ class MCTS():
         self.temperature=123
         self.puct=0.1
 
-    def select():
+    def select(self):
         # first calculate the Q(s,a) and U(s,a)
         # a MCTS call corresponds to a path?
 
@@ -71,24 +74,12 @@ class MCTS():
     def U(s,a):
         pass
 
-    def expand():
+    def expand(self):
         pass
 
-    def backup():
+    def backup(self):
         pass
 
-
-class NeuralNetwork():
-    def __call__(self,state):
-        """
-        the (p,v)=f_theta(s) function
-        f_theta=NeuralNetwork()
-        p,v=f_theta(state)
-        """
-        p=1
-        v=2
-        print("Neural network is run")
-        return p,v
 
 
 
@@ -99,4 +90,5 @@ if __name__=="__main__":
         print(edges[idx])
 
     f_theta=NeuralNetwork()
+    state=None
     p,v=f_theta(state)

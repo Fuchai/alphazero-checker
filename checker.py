@@ -7,7 +7,7 @@ class Checker:
     def __init__(self):
         # just a bunch of interfaces added to the State object.
         # better not to inherit otherwise it's confusing.
-        self.state = State(self.init_new_board(), flipped=False)
+        self.state = CheckerState(self.init_new_board(), flipped=False)
 
     @staticmethod
     def init_new_board():
@@ -113,10 +113,10 @@ class Checker:
                 Checker.print_moves(tree, path + [move])
 
 
-class State(dict):
+class CheckerState(dict):
     # Markov state. No path remembered. Checker is a Markov game.
     def __init__(self, board, flipped):
-        super(State, self).__init__()
+        super(CheckerState, self).__init__()
         # 1 for white, -1 for black. White moves first. I'm white.
         # 2 for crowned white, -2 for crowned black.
         # this is the cartesian notation, not the matrix notation.
@@ -470,11 +470,11 @@ class State(dict):
         new_board = np.copy(self.board)
         new_board = np.rot90(new_board, 2)
         new_board *= -1
-        new_state = State(new_board, flipped=not self.flipped)
+        new_state = CheckerState(new_board, flipped=not self.flipped)
         return new_state
 
 
-class Action(State):
+class Action(CheckerState):
     # Action is a state with a reference to the previous action (state)
     def __init__(self, old_state, new_board, flipped):
         super(Action, self).__init__(new_board, flipped)
