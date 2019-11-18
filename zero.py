@@ -1,10 +1,12 @@
 import checker
+import math
+import numpy as np
 # the permanent tree data structure
 class PermaTree:
     def __init__(self,root):
         self.root=root
 
-    def go():
+    def go(self):
         self.root.run()
 
     def choose(state):
@@ -39,7 +41,7 @@ class State():
             # or self.edges+[pack_action_into_edge(action)]
             # another append syntax
 
-    def pack_action_into_edge(action):
+    def pack_action_into_edge(self,action):
         return Edge(self,action)
 
 
@@ -53,7 +55,10 @@ class MCTS():
         self.temperature=123 # needs to be changed to correct val
         self.puct=0.1
 
-    def select():
+    def simulation(self):
+        pass
+
+    def select(self):
 
         # argmax_input_list = contains a list of [Q(s,a)+U(s,a)] vals of all outbound edges of a node
         argmax_input_list = []
@@ -64,22 +69,22 @@ class MCTS():
             Nsa = edge.visit_count
             Nsb = sum(edge.sibling_visit_count_list) # does Nsb mean edge sibling visit count ? <verify>
             # u(s,a) = controls exploration
-            Usa = (self.puct*edge.prior_probability*math.sqrt(Nsb))/(1+edge.visit_count)
+            Usa = (self.puct*edge.prior_probability*math.sqrt(Nsb))/(1+Nsa)
             # add to argmax_input_list
             argmax_input_list.append(edge.mean_action_value + Usa)
 
         # pick the edge that is returned by the argmax and return it
-        select_action = numpy.argmax(argmax_input_list)
+        select_action = np.argmax(argmax_input_list)
         return select_action
 
     # expand and evaluate the leaf node sl of the selected edge
     # input parameter: a node
-    def expand(node):
+    def expand(self, node):
         # Let sl be the selected node
         # get p,v from neural network
         p = NeuralNetwork.p
         v = NeuralNetwork.v
-        outbound_edge_list = sl.edges
+        outbound_edge_list = node.edges
         for edges in outbound_edge_list:
             edges.Nsa = 0
             edges.action_value = 0
@@ -90,8 +95,7 @@ class MCTS():
 
 
     # trace back the whole path from given node till root node while updating edges on the path
-    def backup(node):
-
+    def backup(self, node):
         # parent of root node is null
         while parent.node != null:
             edge = parent.node
