@@ -65,38 +65,73 @@ class State():
 
 # tree search does not check same state
 # algorithm
+# Input parameters: state (; node of a tree), tree structure, neural net
 class MCTS():
     def __init__(self, permaTree, nn):
         self.permaTree=permaTree
         self.nn=nn
-        self.temperature=123
+        self.temperature=123 # needs to be changed to correct val
         self.puct=0.1
 
-    def select(self):
-        # first calculate the Q(s,a) and U(s,a)
-        # a MCTS call corresponds to a path?
+    def select():
 
-        # for example, pick the (s,a) with the highest U, if that is the correct heurisitics
-        highest=-float.inf()
-        highestsa=None
-        Usa = self.puct*
-        for s,a in satuples:
-            if highest < U(s,a):
-                highest=U(s,a)
-                highestsa=(s,a)
-        s,a=highestsa
+        # argmax_input_list = contains a list of [Q(s,a)+U(s,a)] vals of all outbound edges of a node
+        argmax_input_list = []
+        # every node/state should have a list of next possible actions
+        outbound_edge_list = self.edges
+        # loop through all the child edges of a node
+        for edge in outbound_edge_list:
+            Nsa = edge.visit_count
+            Nsb = sum(edge.sibling_visit_count_list) # does Nsb mean edge sibling visit count ? <verify>
+            # u(s,a) = controls exploration
+            Usa = (self.puct*edge.prior_probability*math.sqrt(Nsb))/(1+edge.visit_count)
+            # add to argmax_input_list
+            argmax_input_list.append(edge.mean_action_value + Usa)
 
-        return s,a
+        # pick the edge that is returned by the argmax and return it
+        select_action = numpy.argmax(argmax_input_list)
+        return select_action
 
-    def U(s,a):
-        pass
+    # expand and evaluate the leaf node sl of the selected edge
+    # input parameter: a node
+    def expand(node):
+        # Let sl be the selected node
+        # get p,v from neural network
+        p = NeuralNetwork.p
+        v = NeuralNetwork.v
+        outbound_edge_list = sl.edges
+        for edges in outbound_edge_list:
+            edges.Nsa = 0
+            edges.action_value = 0
+            edges.mean_action_value = 0
+            edges.prior_probability = v
+            # update perma tree with current edge
+            PermaTree(edges)
 
-    def expand(self):
-        pass
 
-    def backup(self):
-        pass
+    # trace back the whole path from given node till root node while updating edges on the path
+    def backup(node):
 
+        # parent of root node is null
+        while parent.node != null:
+            edge = parent.node
+            edge.visit_count = edge.visit_count + 1
+            edge.action_value =  edge.action_value + v
+            edge.mean_action_value = edge.action_value/edge.visit_count
+
+
+
+class NeuralNetwork():
+    def __call__(self,state):
+        """
+        the (p,v)=f_theta(s) function
+        f_theta=NeuralNetwork()
+        p,v=f_theta(state)
+        """
+        p=1
+        v=2
+        print("Neural network is run")
+        return p,v
 
 
 
