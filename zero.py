@@ -5,45 +5,62 @@ class PermaTree:
         self.root=root
 
     def go(self):
+        # what is run?
         self.root.run()
 
     def choose(state):
         # move from root to a immediate child
-        pass
+        # update parent to None
+        self.root=state
+        root.parent=None
 
 
 class Edge():
-    def __init__(self, from_state, to_state, action, prior_probability):
+# update edge's value by just changing edge.value(?)
+
+    def __init__(self, from_state, action, prior_probability):
         # a State object for where the action comes from
-        self.from_state=from_state
-        self.to_state=to_state
-        # a refernce to the checker action, not MCTS specific, can be anything
-        self.action=action
-        self.visit_count=None
-        self.action_value=None
-        self.mean_action_value=None
-        # does the initialization take the prior_probability?
-        self.prior_probability=prior_probability
+        self.from_state = from_state
+        self.to_state = None # create new child state in expand() and update this
+        # a reference to the checker action, not MCTS specific, can be anything
+        # these values are updated in backup()
+        self.action =  action
+        self.visit_count = 0
+        self.action_value = 0
+        self.mean_action_value = 0
+        self.prior_probability = prior_probability
+
+    def get_stats(self):
+        return self.visit_count, self.action_value, self.mean_action_value, self.prior_probability
+
+    def update_parent(self,childstate):
+        # called in expand()
+        self.to_state = childstate
+
 
 class State():
-    def __init__(self,checker_state):
-        self.checker_state=checker_state
+    def __init__(self,checker_state,parent=None):
         # adjacency list implementation
-        # every element in self.edges is a Edge object
-        self.edges=[] # call get_legal_actions from checker
-        actions, _ =self.board.get_legal_actions()
-        for action in actions:
+        # every element in self.edges is an Edge object
+        self.checker_state = checker_state
+        self.parent = parent # parent is an edge, None when root
+        self.edges=[]
+        board = self.get_board()
+        # call get_legal_actions from checker
+        actions, _ = self.board.get_legal_actions()
 
-            edge=Edge(self,None,action,)
-            self.edges.append(pack_action_into_edge(action))
+        # init and add edges into state
+        for action in actions:
+            edge=Edge(self,action,None) # prior_prob will be updated in expand()
+            self.edges.append(edge)
             # or self.edges+[pack_action_into_edge(action)]
             # another append syntax
 
-    def pack_action_into_edge(self,action):
-        return Edge(self,action)
-
     def get_board(self):
         return self.checker_state.board
+
+    def get_edges(self):
+        return self.edges
 
 
 # tree search does not check same state
