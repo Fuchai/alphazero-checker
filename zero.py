@@ -82,12 +82,12 @@ class MCTS():
     def simulation(self):
         pass
 
-    def select(self):
+    def select(self, node):
 
         # argmax_input_list = contains a list of [Q(s,a)+U(s,a)] vals of all outbound edges of a node
         argmax_input_list = []
         # every node/state should have a list of next possible actions
-        outbound_edge_list = self.edges
+        outbound_edge_list = node.edges
         # loop through all the child edges of a node
         for edge in outbound_edge_list:
             Nsa = edge.visit_count
