@@ -9,10 +9,9 @@ import math
 class PermaTree:
     def __init__(self):
         self.root = None
-        self.all_nodes = HashedContainer()
 
-    def set_root(self, root);
-        self.root=root
+    def set_root(self, root):
+        self.root = root
 
     def move_root(self, node):
         # move from root to a immediate child
@@ -27,16 +26,20 @@ class PermaTree:
     #     pass
 
 
-class Edge():
+class Edge:
+    """
+    Guarantees that from_node and to_node are not None
+    """
+
     # update edge's value by just changing edge.value(?)
 
-    def __init__(self, from_node, action,  permaTree, prior_probability=None):
+    def __init__(self, from_node, action, perma_tree, prior_probability=None):
         # stipuate the property that whenever there is an edge, there must be a
         # destination node
         # a Node object for where the action comes from
         self.from_node = from_node
         # initialize node
-        self.to_node=Node(action, permaTree, self.from_node,self)
+        self.to_node = Node(action, perma_tree, self.from_node, self)
         # self.to_node = None  # create new child node in expand() and update this
         # # a reference to the checker action, not MCTS specific, can be anything
         # # these values are updated in backup()
@@ -45,9 +48,9 @@ class Edge():
         self.action_value = None
         self.mean_action_value = None
         self.prior_probability = prior_probability
-        self.v=None
+        self.v = None
 
-        self.permaTree=permaTree
+        self.perma_tree = perma_tree
         # side effect, initialize the node that the edge points to
 
     def get_stats(self):
@@ -57,23 +60,27 @@ class Edge():
         # called in expand()
         self.to_node = childnode
 
-    def assign_value(self,nn):
-        self.v=nn(to_node)
+    def assign_value(self, nn):
+        self.v = nn(self.to_node)
 
 
-class Node():
-    def __init__(self, checker_node, permaTree, parent=None, from_edge=None):
+class Node:
+    """
+    Guarantees that from_edge is not None. May not have self.edges
+    """
+
+    def __init__(self, checker_state, perma_tree, parent=None, from_edge=None):
         # adjacency list implementation
         # every element in self.edges is an Edge object
-        self.checker_node = checker_node
+        self.checker_state = checker_state
         self.parent = parent  # parent is an edge, None when root
-        self.from_edge=from_edge
+        self.from_edge = from_edge
         # self.parent_node=parent_node
         self.edges = []
-        board = self.get_board()
+        self.board = self.get_board()
         # call get_legal_actions from checker
         # actions, _ = board.get_legal_actions()
-        self.permaTree=permaTree
+        self.perma_tree = perma_tree
 
         # # init and add edges into node
         # for action in actions:
@@ -82,19 +89,22 @@ class Node():
         #     # or self.edges+[pack_action_into_edge(action)]
         #     # another append syntax
 
+    def is_leaf(self):
+        return len(self.edges) == 0
+
     def construct_edges(self, nn):
-        actions, _ = board.get_legal_actions()
+        actions, _ = self.checker_state.get_legal_actions()
 
         # init and add edges into node
         for action in actions:
-            edge = Edge(self, action, None)  # prior_prob will be updated in expand()
-            edge.assign_value(nn)
-            self.edges.append(edge)
+            new_edge = Edge(self, action, None)  # prior_prob will be updated in expand()
+            new_edge.assign_value(nn)
+            self.edges.append(new_edge)
             # or self.edges+[pack_action_into_edge(action)]
             # another append syntax
 
     def get_board(self):
-        return self.checker_node.board
+        return self.checker_state.board
 
     def get_edges(self):
         return self.edges
@@ -104,7 +114,7 @@ class Node():
 # tree search does not check same node
 # algorithm
 # Input parameters: node (; node of a tree), tree structure, neural net
-class MCTS():
+class MCTS:
     def __init__(self, nn):
         self.permaTree = PermaTree()
         self.nn = nn
@@ -115,37 +125,36 @@ class MCTS():
         pass
 
     # run select, expand, backup L-times on a root node
-    def simulation(self,root):
-        total_epochs=100
+    def simulation(self, root):
+        total_epochs = 100
         for epoch in range(total_epochs):
-            current_node=root
-            L=1600
+            current_node = root
+            L = 1600
             for l in range(L):
-                selected_edge=select(current_node)
-                selected_node=selected_edge.to_node
-                if len(selected_node.edges)==0:
-                    node = expand(selected_node)
-                    backup(selected_node)
-                    current_node=root
+                selected_edge = self.select(current_node)
+                selected_node = selected_edge.to_node
+                if selected_node.is_leaf():
+                    self.expand(selected_node)
+                    self.backup(selected_node)
+                    current_node = root
                 else:
-                    current_node=selected_node
+                    current_node = selected_node
                     # if dead end ?
-            play()
+            self.play()
 
     def play(self):
-        root=self.permaTree.root
-        total_visit_count=root.visit_count
-        scores=[]
-        for edge in root.edges:
-            vc=edge.visit_count
-            scores.append(temperature_controlled(vc))
-        sum_socres=sum(scores)
-        scores=[score/sum_socres for score in scores]
-        best_action=np.argmax(scores)
-        permaTree.move_root(best_action.to_node)
+        root = self.permaTree.root
+        scores = []
+        for level_one_edge in root.edges:
+            vc = level_one_edge.visit_count
+            scores.append(self.temperature_adjust(vc))
+        sum_socres = sum(scores)
+        scores = [score / sum_socres for score in scores]
+        best_action = np.argmax(scores)
+        self.permaTree.move_root(best_action.to_node)
 
-    def temperature_controlled(self,count):
-        return count**(1/self.temperature)
+    def temperature_adjust(self, count):
+        return count ** (1 / self.temperature)
 
     def select(self, node):
 
@@ -158,7 +167,7 @@ class MCTS():
             Nsa = edge.visit_count
             Nsb = sum(edge.sibling_visit_count_list)  # does Nsb mean edge sibling visit count ? <verify>
             # u(s,a) = controls exploration
-            Usa = (self.puct*edge.prior_probability*math.sqrt(Nsb))/(1+Nsa)
+            Usa = (self.puct * edge.prior_probability * math.sqrt(Nsb)) / (1 + Nsa)
             # add to argmax_input_list
             argmax_input_list.append(edge.mean_action_value + Usa)
 
@@ -177,13 +186,13 @@ class MCTS():
         # v = NeuralNetwork.v
         # add
         # will call assign value for each child
-        node.construct_edges(nn=self.nn)
+        node.construct_edges(self.nn)
         # values should not be None
-        p=self.nn.children_values_to_probability(self, children_value_tensors):
+        p = self.nn.children_values_to_probability(children_value_tensors)
         # assert that all edges must not be shuffled
 
         outbound_edge_list = node.edges
-        for idx,edge in enumerate(outbound_edge_list):
+        for idx, edge in enumerate(outbound_edge_list):
             edge.visit_count = 0
             edge.action_value = 0
             edge.mean_action_value = 0
@@ -191,20 +200,20 @@ class MCTS():
             # update perma tree with current edge
             # self.permaTree.update(edge)
 
-        return node
-
     # trace back the whole path from given node till root node while updating edges on the path
-    def backup(self, node):
+    def backup(self, leaf_node):
         # parent of root node is null
-        while node.parent is not None:
-            edge = parent.node
-            edge = node.from_edge.parent
+        assert (leaf_node.is_leaf())
+        current_node = leaf_node
+        while current_node.parent is not None:
+            edge = current_node.from_edge
             edge.visit_count = edge.visit_count + 1
             edge.action_value = edge.action_value + v
             edge.mean_action_value = edge.action_value / edge.visit_count
+            current_node = edge.from_node
 
 
-class NeuralNetwork():
+class NeuralNetwork:
     def __call__(self, node):
         """
         the (p,v)=f_theta(s) function
