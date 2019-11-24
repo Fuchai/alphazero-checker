@@ -16,16 +16,64 @@ class MCTS:
         self.checker=Checker()
         self.permaTree = PermaTree(self.checker)
         self.nn = nn
-        self.temperature = 1
+        # changes to False after the first 30 moves
+        self.temperature = True
+        self.temperature_change_at=30
         self.puct = 0.1
+        self.max_game_length=300
+        self.game=Game()
+        self.time_steps=[]
 
-    def run(self):
-        terminal=False
-        while not terminal:
-            simulations_per_play=1600
+
+    def play_until_terminal(self):
+        """
+        plays the actual game.
+        play until terminal (including resignation)
+        when terminal, the winner is calculated, and all data points get an extra value
+        :return:
+        """
+        for step in range(self.max_game_length):
+            simulations_per_play=200
+            if step==self.temperature_change_at:
+                self.temperature=False
             for epoch in range(simulations_per_play):
                 self.simulation()
             self.play()
+            if self.is_terminal():
+                break
+
+        # assign z
+        # TODO
+        for dp in self.time_steps:
+            if dp.checker_state.is_flipped:
+                dp.z=1
+            else:
+                dp.z=-1
+
+    def play(self):
+        """
+        moves the root of the tree
+        add a data point without the final outcome z
+        final outcome will be assigned at terminal
+        :return:
+        """
+        root = self.permaTree.root
+        scores = []
+        for level_one_edge in root.edges:
+            vc = level_one_edge.visit_count
+            scores.append(vc)
+        if self.temperature:
+            sum_scores = sum(scores)
+            pi = [score / sum_scores for score in scores]
+            # samples instead
+            # TODO
+            self.permaTree.move_root(sampled_action.to_node)
+        else:
+            pi = np.argmax(scores)
+            # TODO
+            self.permaTree.move_root(max_action.to_node)
+
+        self.time_steps.append(TimeStep(root.checker_state, root.get_children_checker_states, pi))
 
 
     def simulation(self):
@@ -44,16 +92,9 @@ class MCTS:
         self.backup(selected_node)
         return l
 
-    def play(self):
-        root = self.permaTree.root
-        scores = []
-        for level_one_edge in root.edges:
-            vc = level_one_edge.visit_count
-            scores.append(self.temperature_adjust(vc))
-        sum_socres = sum(scores)
-        scores = [score / sum_socres for score in scores]
-        best_action = np.argmax(scores)
-        self.permaTree.move_root(best_action.to_node)
+    def is_terminal(self):
+        # TODO
+        return False
 
     def temperature_adjust(self, count):
         return count ** (1 / self.temperature)
@@ -75,6 +116,7 @@ class MCTS:
             # u(s,a) = controls exploration
             Usa = (self.puct * edge.prior_probability * math.sqrt(Nsb)) / (1 + Nsa)
             # add to argmax_input_list
+            # TODO
             argmax_input_list.append(edge.mean_action_value + Usa)
 
         # pick the edge that is returned by the argmax and return it
@@ -108,6 +150,7 @@ class MCTS:
         p = self.nn.children_values_to_probability(children_values)
         # assert that all edges must not be shuffled
         edge.prior_probability = p[idx]
+        # TODO
 
     def backup(self, leaf_node):
         """
@@ -126,12 +169,8 @@ class MCTS:
             edge.mean_action_value = edge.total_action_value / edge.visit_count
             current_node = edge.from_node
 
-if __name__ == "__main__":
-    edges = [1, 2, 3, 4]
-    for idx, edge in enumerate(edges):
-        print(edge)
-        print(edges[idx])
-
-    f_theta = NeuralNetwork()
-    node = None
-    p, v = f_theta(node)
+class TimeStep:
+    def __init__(self, node_state, children_states, mcts_pi):
+        self.node_state=node_state
+        self.children_states=children_states
+        self.mcts_pi=mcts_pi

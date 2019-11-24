@@ -66,12 +66,12 @@ class PermaNode:
             new_edge = PermaEdge(self.perma_tree, action, self)  # prior_prob will be updated in expand()
             self.edges.append(new_edge)
 
+    def get_children_checker_states(self):
+        return (edge.to_node.checker_state for edge in self.edges)
+
     def expand_values_get_prior_prob(self, nn):
         values=[]
         for edge in self.edges:
             val=edge.init_value(nn)
             values.append(val)
         return values
-
-    def get_board(self):
-        return self.checker_state.board

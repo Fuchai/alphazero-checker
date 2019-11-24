@@ -23,7 +23,7 @@ class ResBlock(nn.Module):
         return out6
 
 
-class NeuralNetwork(nn.Module):
+class NoPolicy(nn.Module):
     """
     Modified for checker.
     """
@@ -31,7 +31,7 @@ class NeuralNetwork(nn.Module):
     def __init__(self):
         scale = 64
         tower_len = 9
-        super(NeuralNetwork, self).__init__()
+        super(NoPolicy, self).__init__()
         self.conv1 = nn.Conv2d(4, scale, 3, padding=1)
         self.bn1 = nn.BatchNorm2d(scale)
         self.tower = nn.ModuleList([ResBlock(scale)] * tower_len)
@@ -54,7 +54,7 @@ class NeuralNetwork(nn.Module):
             nn.ReLU(),
         )
 
-    def forward(self, input):
+    def forward(self, checker_state):
         """
         the (p,v)=f_theta(s) function
         f_theta=NeuralNetwork()
@@ -66,7 +66,7 @@ class NeuralNetwork(nn.Module):
 
         This implementation might not work in the end.
 
-        :param state: a MCTS state
+        :param checker_state: a checker state
         :return: value of the state
         """
 
@@ -99,6 +99,17 @@ class NeuralNetwork(nn.Module):
         return policy
 
 
+class PaperLoss(nn.Module):
+    def __init__(self):
+        super(PaperLoss, self).__init__()
+        self.l1=torch.nn.L1Loss()
+        self.lsm=nn.LogSoftmax()
+        self.c=0.01
+
+    def forward(self,v,z,logit_p,pi, network):
+        return self.l1(v,z) - pi*self.lsm(logit_p)
+
+
 def binary_board(board):
     # a checker board is represented with 2,1,0,-1,-2
     # represent checker board as a four dimension board instead: whether 2, whether 1, whether -1, whether -2
@@ -125,7 +136,7 @@ class BoardWrapper():
 
 def main_example_1():
     i = torch.Tensor(np.random.rand(16, 4, 8, 8))
-    nn = NeuralNetwork()
+    nn = NoPolicy()
     ret=nn(i)
     print(ret)
     print(ret.shape)
