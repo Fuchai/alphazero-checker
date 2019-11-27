@@ -1,7 +1,9 @@
+from neuralnetwork import *
 # the permanent tree data structure
 class PermaTree:
-    def __init__(self, checker):
-        self.root=PermaNode(checker.state)
+    def __init__(self, checker, is_cuda):
+        self.is_cuda=is_cuda
+        self.root=PermaNode(self,checker.state)
 
     def move_root(self, node):
         # move from root to a immediate child
@@ -33,12 +35,20 @@ class PermaEdge:
 
         # # these values are initialized at expand() and updated in backup()
         self.prior_probability = None
-        self.visit_count = None
-        self.total_action_value = None
-        self.mean_action_value = None
-        self.value_when_expanded = None
+        self.visit_count = 0
+        self.total_action_value = 0
+        self.mean_action_value = 0
+        self.value = None
         # side effect, initialize the node that the edge points to
 
+    def checker_to_tensor(self):
+        return binary_board(self.to_node.checker_state.board)
+
+    def assign_value(self, nn):
+        tensors=states_to_batch_tensor([self.to_node.checker_state], self.perma_tree.is_cuda)
+        value=nn(tensors)
+        self.value=value.cpu().numpy().tolist()[0][0]
+        return value
 
 class PermaNode:
     """
@@ -57,21 +67,35 @@ class PermaNode:
     def is_leaf(self):
         return len(self.edges) == 0
 
+    def is_root(self):
+        return self.from_edge is None
+
     def construct_edges(self):
+        """
+
+        :return: there are no edges
+        """
         # call get_legal_actions from checker
         actions, _ = self.checker_state.get_legal_actions()
-
+        if len(actions)==0:
+            return True
         # init and add edges into node
         for action in actions:
             new_edge = PermaEdge(self.perma_tree, action, self)  # prior_prob will be updated in expand()
             self.edges.append(new_edge)
+        return False
 
     def get_children_checker_states(self):
         return (edge.to_node.checker_state for edge in self.edges)
 
-    def expand_values_get_prior_prob(self, nn):
+    def assign_children_values(self, nn):
         values=[]
         for edge in self.edges:
-            val=edge.init_value(nn)
+            val= edge.assign_value(nn)
             values.append(val)
-        return values
+        if len(values)==0:
+            print("STOP HERE")
+        ret= torch.cat(values)
+
+        # initialize the prior probability of all children
+        return ret

@@ -2,6 +2,7 @@ from checker import Checker
 import numpy as np
 import math
 from permatree import PermaTree
+import random
 
 # tree search does not check same node
 # algorithm
@@ -12,17 +13,17 @@ class MCTS:
     page 2 right column paragraph 1).
     """
 
-    def __init__(self, nn):
+    def __init__(self, nn, is_cuda):
         self.checker=Checker()
-        self.permaTree = PermaTree(self.checker)
+        self.permaTree = PermaTree(self.checker, is_cuda)
         self.nn = nn
         # changes to False after the first 30 moves
         self.temperature = True
         self.temperature_change_at=30
         self.puct = 0.1
         self.max_game_length=300
-        self.game=Game()
         self.time_steps=[]
+        self.is_cuda=is_cuda
 
 
     def play_until_terminal(self):
@@ -33,14 +34,20 @@ class MCTS:
         :return:
         """
         for step in range(self.max_game_length):
+            if step % 10 ==0:
+                print("Game step "+ str(step) + " /"+ str(self.max_game_length))
             simulations_per_play=200
             if step==self.temperature_change_at:
                 self.temperature=False
-            for epoch in range(simulations_per_play):
+            for simulation in range(simulations_per_play):
                 self.simulation()
+                if simulation % 40 == 0:
+                    print("Simulation " + str(simulation)+ " /"+ str(simulations_per_play))
             self.play()
             if self.is_terminal():
                 break
+
+        print("Playing")
 
         # assign z
         # TODO
@@ -67,10 +74,16 @@ class MCTS:
             pi = [score / sum_scores for score in scores]
             # samples instead
             # TODO
+            sampled_action=random.choices(range(len(root.edges)), weights=pi, k=1)
+            sampled_action=root.edges[sampled_action[0]]
             self.permaTree.move_root(sampled_action.to_node)
         else:
-            pi = np.argmax(scores)
-            # TODO
+            maxscore=- float("inf")
+            maxedx=None
+            for edx, score in enumerate(scores):
+                if score>maxscore:
+                    maxedx=edx
+            max_action=root.edges[maxedx]
             self.permaTree.move_root(max_action.to_node)
 
         self.time_steps.append(TimeStep(root.checker_state, root.get_children_checker_states, pi))
@@ -85,11 +98,14 @@ class MCTS:
         l = 1
         while not current_node.is_leaf():
             selected_edge = self.select(current_node)
-            selected_node = selected_edge.to_node
-            current_node = selected_node
+            current_node = selected_edge.to_node
             l+=1
-        self.expand(selected_node)
-        self.backup(selected_node)
+        self.expand(current_node)
+        if current_node.is_root():
+            v=0
+        else:
+            v=current_node.from_edge.value
+        self.backup(current_node, v)
         return l
 
     def is_terminal(self):
@@ -106,23 +122,33 @@ class MCTS:
         :return:
         """
         # argmax_input_list = contains a list of [Q(s,a)+U(s,a)] vals of all outbound edges of a node
-        argmax_input_list = []
+        QU = []
         # every node/node should have a list of next possible actions
-        outbound_edge_list = node.edges
         # loop through all the child edges of a node
-        for edge in outbound_edge_list:
+        if node.is_root():
+            sumnsb=0
+            for edge in node.edges:
+                sumnsb+=edge.visit_count
+        else:
+            sumnsb=node.from_edge.visit_count
+
+        for edge in node.edges:
             Nsa = edge.visit_count
-            Nsb = sum(edge.sibling_visit_count_list)  # does Nsb mean edge sibling visit count ? <verify>
+            # Nsb = sum(edge.sibling_visit_count_list)  # does Nsb mean edge sibling visit count ? <verify>
             # u(s,a) = controls exploration
-            Usa = (self.puct * edge.prior_probability * math.sqrt(Nsb)) / (1 + Nsa)
-            # add to argmax_input_list
-            # TODO
-            argmax_input_list.append(edge.mean_action_value + Usa)
+            Usa = (self.puct * edge.prior_probability * math.sqrt(sumnsb)) / (1 + Nsa)
+            QU.append(edge.mean_action_value + Usa)
 
         # pick the edge that is returned by the argmax and return it
         # make it node
-        selected_action = np.argmax(argmax_input_list)
-        return selected_action
+        maxqu=-float('inf')
+        maxedx=None
+        for edx, qu in enumerate(QU):
+            if qu > maxqu:
+                maxedx=edx
+                maxqu=qu
+        selected_edge = node.edges[maxedx]
+        return selected_edge
 
     def expand(self, leaf_node):
         """
@@ -133,26 +159,31 @@ class MCTS:
         """
 
         # will call assign value for each child
-        leaf_node.construct_edges(self.nn)
+        terminal=leaf_node.construct_edges()
+        if terminal:
+            return
 
-        # initialize basic statistics
-        for idx, edge in enumerate(leaf_node.edges):
-            edge.visit_count = 0
-            edge.action_value = 0
-            edge.mean_action_value = 0
-            # update perma tree with current edge
-            # self.permaTree.update(edge)
+        # # initialize basic statistics
+        # for idx, edge in enumerate(leaf_node.edges):
+        #     edge.visit_count = 0
+        #     edge.action_value = 0
+        #     edge.mean_action_value = 0
+        #     # update perma tree with current edge
+        #     # self.permaTree.update(edge)
 
         # initialize value of all children
-        children_values=leaf_node.expand_values_get_prior_prob()
+        children_value_tensor = leaf_node.assign_children_values(self.nn)
 
         # initialize the prior probability of all children
-        p = self.nn.children_values_to_probability(children_values)
+        p = self.nn.children_values_to_probability(children_value_tensor)
         # assert that all edges must not be shuffled
-        edge.prior_probability = p[idx]
-        # TODO
+        # this should only be used for MCTS, not training. no gradient is here.
+        npp = p.cpu().numpy().tolist()
+        for edx, edge in enumerate(leaf_node.edges):
+            edge.prior_probability = npp[edx]
 
-    def backup(self, leaf_node):
+
+    def backup(self, leaf_node, v):
         """
         trace back the whole path from given node till root node while updating edges on the path
 
@@ -160,7 +191,6 @@ class MCTS:
         :return:
         """
         # parent of root node is null
-        assert (leaf_node.is_leaf())
         current_node = leaf_node
         while current_node.parent is not None:
             edge = current_node.from_edge
@@ -174,3 +204,10 @@ class TimeStep:
         self.node_state=node_state
         self.children_states=children_states
         self.mcts_pi=mcts_pi
+
+if __name__ == '__main__':
+    from neuralnetwork import NoPolicy
+    nn = NoPolicy()
+    mcts = MCTS(nn)
+    mcts.play_until_terminal()
+    print(mcts.time_steps)

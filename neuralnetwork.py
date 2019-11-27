@@ -54,7 +54,7 @@ class NoPolicy(nn.Module):
             nn.ReLU(),
         )
 
-    def forward(self, checker_state):
+    def forward(self, input_tensor):
         """
         the (p,v)=f_theta(s) function
         f_theta=NeuralNetwork()
@@ -66,11 +66,10 @@ class NoPolicy(nn.Module):
 
         This implementation might not work in the end.
 
-        :param checker_state: a checker state
+        :param input_tensor: a batch tensor
         :return: value of the state
         """
-
-        out = self.conv1(input)
+        out = self.conv1(input_tensor)
         out1 = self.bn1(out)
         out2 = torch.relu(out1)
         for res in self.tower:
@@ -88,14 +87,14 @@ class NoPolicy(nn.Module):
         v2 = torch.tanh(v2)
         return v2
 
-    def children_values_to_probability(self, children_value_tensors):
+    def children_values_to_probability(self, children_value_tensor):
         """
 
         :param children_value_tensors: Must be tensors, because it needs to receive gradient at backup.
         :return:
         """
-        vals = torch.stack(children_value_tensors)
-        policy = torch.softmax(vals, dim=0)
+        policy = torch.softmax(children_value_tensor, dim=0)
+        policy=policy.squeeze(1)
         return policy
 
 
@@ -104,11 +103,21 @@ class PaperLoss(nn.Module):
         super(PaperLoss, self).__init__()
         self.l1=torch.nn.L1Loss()
         self.lsm=nn.LogSoftmax()
-        self.c=0.01
 
     def forward(self,v,z,logit_p,pi, network):
         return self.l1(v,z) - pi*self.lsm(logit_p)
 
+
+def states_to_batch_tensor(states, is_cuda):
+    np_arrays=[]
+    for state in states:
+        np_arrays.append(binary_board(state.board))
+    if is_cuda:
+        tensors=[torch.Tensor(array).cuda() for array in np_arrays]
+    else:
+        tensors=[torch.Tensor(array) for array in np_arrays]
+
+    return torch.stack(tensors)
 
 def binary_board(board):
     # a checker board is represented with 2,1,0,-1,-2
@@ -119,10 +128,13 @@ def binary_board(board):
     negtwo = board == -2
 
     ret = np.stack((two, one, negone, negtwo))
-    return ret
+    return ret.astype(np.uint8)
 
-def batch_board_tensor(board_list):
-    batch_tensor=[torch.Tensor(binary_board(board).astype(np.uint8)) for board in board_list]
+def batch_board_tensor(board_list,is_cuda):
+    if is_cuda:
+        batch_tensor=[torch.Tensor(binary_board(board)).cuda() for board in board_list]
+    else:
+        batch_tensor=[torch.Tensor(binary_board(board)) for board in board_list]
     ret=torch.stack(batch_tensor)
     return ret
 
