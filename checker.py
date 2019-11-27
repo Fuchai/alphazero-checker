@@ -217,7 +217,7 @@ class CheckerState(dict):
             # return an action instead of a state, since an action holds a reference to previous action for repeated
             # jumps
             # in this case of moving, it's the same, but we prefer unified interface
-            action = Action(self, new_board, self.flipped)
+            action = CheckerAction(self, new_board, self.flipped)
             if debug:
                 assert ((self.board>0).sum()==(action.board>0).sum())
                 assert ((self.board<0).sum()>=(action.board<0).sum())
@@ -325,7 +325,7 @@ class CheckerState(dict):
                 new_board[proposed_new_row, proposed_new_column] = 2
             else:
                 new_board[proposed_new_row, proposed_new_column] = 1
-            action = Action(self, new_board, self.flipped)
+            action = CheckerAction(self, new_board, self.flipped)
             if debug:
                 assert ((self.board>0).sum()==(action.board>0).sum())
                 assert ((self.board<0).sum()>=(action.board<0).sum())
@@ -401,7 +401,7 @@ class CheckerState(dict):
             new_board[taken_row, taken_col] = 0
             new_board[from_row, from_col] = 0
             new_board[proposed_new_row, proposed_new_column] = 2
-            action = Action(self, new_board, self.flipped)
+            action = CheckerAction(self, new_board, self.flipped)
             if debug:
                 assert ((self.board>0).sum()==(action.board>0).sum())
                 assert ((self.board<0).sum()>=(action.board<0).sum())
@@ -473,11 +473,16 @@ class CheckerState(dict):
         new_state = CheckerState(new_board, flipped=not self.flipped)
         return new_state
 
+    def evaluate(self):
+        if not self.flipped:
+            return self.board.sum()
+        else:
+            return -self.board.sum()
 
-class Action(CheckerState):
+class CheckerAction(CheckerState):
     # Action is a state with a reference to the previous action (state)
     def __init__(self, old_state, new_board, flipped):
-        super(Action, self).__init__(new_board, flipped)
+        super(CheckerAction, self).__init__(new_board, flipped)
         # from what state did the action take place
         # if it is a multi jump, this old_state must be an Action object
         self.old_state = old_state

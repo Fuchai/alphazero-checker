@@ -30,7 +30,7 @@ class PermaEdge:
         # a Node object for where the action comes from
         self.from_node = from_node
         # initialize node whenever an edge is created, guarantees the data structure property
-        self.to_node = PermaNode(perma_tree, action, self.from_node, self)
+        self.to_node = PermaNode(perma_tree, action.get_flipped_state(), self.from_node, self)
         # self.to_node = None  # create new child node in expand() and update this
 
         # # these values are initialized at expand() and updated in backup()
@@ -88,14 +88,25 @@ class PermaNode:
     def get_children_checker_states(self):
         return (edge.to_node.checker_state for edge in self.edges)
 
-    def assign_children_values(self, nn):
-        values=[]
-        for edge in self.edges:
-            val= edge.assign_value(nn)
-            values.append(val)
-        if len(values)==0:
-            print("STOP HERE")
-        ret= torch.cat(values)
+    def assign_children_values_prior_p(self, nn):
+        """
+        self is a leaf node that is being expanded
+        :param nn:
+        :return:
+        """
+        states=[edge.to_node.checker_state for edge in self.edges]
+        input_tensor=states_to_batch_tensor(states, self.perma_tree.is_cuda)
+        value_tensor=nn(input_tensor)
+        value_array=value_tensor.cpu().numpy()
+        value_array=np.squeeze(value_array,axis=1)
+        value_list=value_array.tolist()
+        for edx, edge in enumerate(self.edges):
+            edge.value=value_list[edx]
 
         # initialize the prior probability of all children
-        return ret
+        p = nn.children_values_to_probability(value_tensor)
+        # assert that all edges must not be shuffled
+        # this should only be used for MCTS, not training. no gradient is here.
+        npp = p.cpu().numpy().tolist()
+        for edx, edge in enumerate(self.edges):
+            edge.prior_probability = npp[edx]
