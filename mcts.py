@@ -1,3 +1,5 @@
+import time
+
 from checker import Checker
 import numpy as np
 import math
@@ -22,7 +24,7 @@ class MCTS:
         self.temperature = True
         self.temperature_change_at = 30
         self.puct = 0.1
-        self.max_game_length = 300
+        self.max_game_length = 200
         self.time_steps = []
         self.is_cuda = is_cuda
 
@@ -33,34 +35,45 @@ class MCTS:
         when terminal, the winner is calculated, and all data points get an extra value
         :return:
         """
-        terminal = False
         for step in range(self.max_game_length):
             if step % 10 == 0:
                 print("Game step " + str(step) + " /" + str(self.max_game_length))
-            simulations_per_play = 200
+            simulations_per_play = 50
             if step == self.temperature_change_at:
                 self.temperature = False
+            t0 = time.time()
             for simulation in range(simulations_per_play):
                 self.simulation()
                 if simulation % 40 == 0:
                     print("Simulation " + str(simulation) + " /" + str(simulations_per_play))
+            t1 = time.time()
+            print("Time per search: " + str(t1 - t0))
             terminal = self.play()
+            if terminal:
+                break
+        if terminal == 2:
+            # no capture
+            z = 0
+        else:
+            # no moves or no capture
+            # there will be an outcome whether the game reaches terminal or not
+            final_state = self.permaTree.root.checker_state
+            outcome = final_state.evaluate()
+            if outcome == 0:
+                z = 0
+            else:
+                #      flipped  not flipped
+                # o>0    -1          1
+                # o<0     1         -1
 
-        # there will be an outcome whether the game reaches terminal or not
-        final_state = self.permaTree.root.checker_state
-        outcome = final_state.evaluate()
-        #      flipped  not flipped
-        # o>0    -1          1
-        # o<0     1         -1
-
-        a = final_state.flipped
-        b = outcome > 0
-        z = a ^ b
-        z = z * 2 - 1
+                a = final_state.flipped
+                b = outcome > 0
+                z = a ^ b
+                z = z * 2 - 1
 
         # assign z
         for ts in self.time_steps:
-            if not ts.checker_state.is_flipped:
+            if not ts.checker_state.flipped:
                 ts.z = z
             else:
                 ts.z = -z
@@ -70,9 +83,14 @@ class MCTS:
         moves the root of the tree
         add a data point without the final outcome z
         final outcome will be assigned at terminal
-        :return: game terminates with no moves from root
+        :return:
+        0: normal, game continues
+        1: game terminates with no moves from root
+        2: draw due to excessive non-capturing
         """
         root = self.permaTree.root
+        if len(root.edges) == 0:
+            return 1
         scores = []
         for level_one_edge in root.edges:
             vc = level_one_edge.visit_count
@@ -81,8 +99,7 @@ class MCTS:
             sum_scores = sum(scores)
             pi = [score / sum_scores for score in scores]
             # samples instead
-            if len(root.edges) == 0:
-                return True
+
             sampled_action = random.choices(range(len(root.edges)), weights=pi, k=1)
             sampled_action = root.edges[sampled_action[0]]
             self.permaTree.move_root(sampled_action.to_node)
@@ -97,6 +114,9 @@ class MCTS:
             pi[maxedx] = 1
             max_action = root.edges[maxedx]
             self.permaTree.move_root(max_action.to_node)
+        if self.permaTree.last_capture == 40:
+            print("Terminated due to peaceful activity")
+            return 2
 
         self.time_steps.append(TimeStep(root.checker_state, root.get_children_checker_states, pi))
 
@@ -197,10 +217,13 @@ class MCTS:
             edge.mean_action_value = edge.total_action_value / edge.visit_count
             current_node = edge.from_node
 
+    def print_root(self):
+        self.permaTree.root.checker_state.print_board()
+
 
 class TimeStep:
-    def __init__(self, node_state, children_states, mcts_pi):
-        self.node_state = node_state
+    def __init__(self, checker_state, children_states, mcts_pi):
+        self.checker_state = checker_state
         self.children_states = children_states
         self.mcts_pi = mcts_pi
 

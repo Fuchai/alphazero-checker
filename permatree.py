@@ -3,11 +3,18 @@ from neuralnetwork import *
 class PermaTree:
     def __init__(self, checker, is_cuda):
         self.is_cuda=is_cuda
+        self.node_count=0
         self.root=PermaNode(self,checker.state)
+        self.last_capture=0
 
     def move_root(self, node):
         # move from root to a immediate child
         # update parent to None
+        if not node.is_root():
+            if node.from_edge.is_capture:
+                self.last_capture=0
+            else:
+                self.last_capture+=1
         self.root = node
         self.root.parent = None
 
@@ -31,6 +38,7 @@ class PermaEdge:
         self.from_node = from_node
         # initialize node whenever an edge is created, guarantees the data structure property
         self.to_node = PermaNode(perma_tree, action.get_flipped_state(), self.from_node, self)
+        self.is_capture=action.is_capture
         # self.to_node = None  # create new child node in expand() and update this
 
         # # these values are initialized at expand() and updated in backup()
@@ -63,6 +71,8 @@ class PermaNode:
         self.from_edge = from_edge
         # adjacency list implementation
         self.edges = []
+
+        perma_tree.node_count+=1
 
     def is_leaf(self):
         return len(self.edges) == 0

@@ -129,7 +129,7 @@ class CheckerState(dict):
     def get_legal_actions(self):
         """
         Your main function to get legal actions. It returns every legal actions together with a
-        dict-of-dict representation of action tree, where  the key is action and
+        dict-of-dict representation of action tree, where the key is action and
         the value is (state, dict). The tree is
         only for the current player, not the complete game.
 
@@ -165,6 +165,7 @@ class CheckerState(dict):
             for column in range(0, 8):
                 my_piece = self.board[row, column]
                 if my_piece == 1:
+                    # man moves
                     # move left forward
                     for c_delta in (-1, 1):
                         proposed_new_row = row + 1
@@ -175,6 +176,7 @@ class CheckerState(dict):
                             legal_moves.append(action)
                             immediate_children[(row, column, proposed_new_row, proposed_new_column)] = (action, None)
                 if my_piece == 2:
+                    # king moves
                     # move left forward
                     for r_delta in (-1, 1):
                         for c_delta in (-1, 1):
@@ -217,7 +219,7 @@ class CheckerState(dict):
             # return an action instead of a state, since an action holds a reference to previous action for repeated
             # jumps
             # in this case of moving, it's the same, but we prefer unified interface
-            action = CheckerAction(self, new_board, self.flipped)
+            action = CheckerAction(self, new_board, self.flipped, False)
             if debug:
                 assert ((self.board>0).sum()==(action.board>0).sum())
                 assert ((self.board<0).sum()>=(action.board<0).sum())
@@ -325,7 +327,7 @@ class CheckerState(dict):
                 new_board[proposed_new_row, proposed_new_column] = 2
             else:
                 new_board[proposed_new_row, proposed_new_column] = 1
-            action = CheckerAction(self, new_board, self.flipped)
+            action = CheckerAction(self, new_board, self.flipped, True)
             if debug:
                 assert ((self.board>0).sum()==(action.board>0).sum())
                 assert ((self.board<0).sum()>=(action.board<0).sum())
@@ -401,7 +403,7 @@ class CheckerState(dict):
             new_board[taken_row, taken_col] = 0
             new_board[from_row, from_col] = 0
             new_board[proposed_new_row, proposed_new_column] = 2
-            action = CheckerAction(self, new_board, self.flipped)
+            action = CheckerAction(self, new_board, self.flipped, True)
             if debug:
                 assert ((self.board>0).sum()==(action.board>0).sum())
                 assert ((self.board<0).sum()>=(action.board<0).sum())
@@ -481,7 +483,7 @@ class CheckerState(dict):
 
 class CheckerAction(CheckerState):
     # Action is a state with a reference to the previous action (state)
-    def __init__(self, old_state, new_board, flipped):
+    def __init__(self, old_state, new_board, flipped, capture):
         super(CheckerAction, self).__init__(new_board, flipped)
         # from what state did the action take place
         # if it is a multi jump, this old_state must be an Action object
@@ -491,6 +493,7 @@ class CheckerAction(CheckerState):
         # default for moves, guarantees override by jumps
         self.is_terminal = True
         self.is_action = True
+        self.is_capture = capture
 
     def is_multi_jump(self):
         if self.old_state.is_action:
