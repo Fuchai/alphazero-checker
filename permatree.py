@@ -1,6 +1,5 @@
 from neuralnetwork import *
-from multiprocessing import Lock
-
+from threading import Lock
 
 # the permanent tree data structure
 class PermaTree:
@@ -76,8 +75,8 @@ class PermaNode:
         # adjacency list implementation
         self.edges = []
         # locked if the children are being evaluated by the neural network or selection is in progress
-        self.expansion_lock = Lock()
-
+        self.lock = Lock()
+        self.unassigned=0
         perma_tree.node_count += 1
 
     def is_leaf(self):
@@ -104,27 +103,34 @@ class PermaNode:
     def get_children_checker_states(self):
         return (edge.to_node.checker_state for edge in self.edges)
 
-    def assign_children_values_prior_p(self, parallel_nn_queue):
+    def put_children_on_nn_queue(self, nn_queue):
         """
         self is a leaf node that is being expanded
         :param parallel_nn_queue:
         :return:
         """
-        # this lock will be released when all of its children are evaluated
-        self.expansion_lock.acquire()
-        states = [edge.to_node.checker_state for edge in self.edges]
-        input_tensor = states_to_batch_tensor(states, self.perma_tree.is_cuda)
-        value_tensor = parallel_nn_queue.put(input_tensor)
-        value_array = value_tensor.cpu().numpy()
-        value_array = np.squeeze(value_array, axis=1)
-        value_list = value_array.tolist()
-        for edx, edge in enumerate(self.edges):
-            edge.value = value_list[edx]
+        self.lock.acquire()
+        for edge in self.edges:
+            self.unassigned+=1
+            nn_queue.put(edge)
 
-        # initialize the prior probability of all children
-        p = parallel_nn_queue.children_values_to_probability(value_tensor)
-        # assert that all edges must not be shuffled
-        # this should only be used for MCTS, not training. no gradient is here.
-        npp = p.cpu().numpy().tolist()
-        for edx, edge in enumerate(self.edges):
-            edge.prior_probability = npp[edx]
+        #
+        # # this lock will be released when all of its children are evaluated
+        # states = [edge.to_node.checker_state for edge in self.edges]
+        # input_tensor = states_to_batch_tensor(states, self.perma_tree.is_cuda)
+        # value_tensor = nn(input_tensor)
+        # value_array = value_tensor.cpu().numpy()
+        # value_array = np.squeeze(value_array, axis=1)
+        # value_list = value_array.tolist()
+        # for edx, edge in enumerate(self.edges):
+        #     edge.value = value_list[edx]
+        #
+        # # initialize the prior probability of all children
+        # p = nn.children_values_to_probability(value_tensor)
+        # # assert that all edges must not be shuffled
+        # # this should only be used for MCTS, not training. no gradient is here.
+        # npp = p.cpu().numpy().tolist()
+        # for edx, edge in enumerate(self.edges):
+        #     edge.prior_probability = npp[edx]
+
+

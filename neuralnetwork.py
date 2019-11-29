@@ -97,13 +97,6 @@ class NoPolicy(nn.Module):
         policy=policy.squeeze(1)
         return policy
 
-class ParallelNN():
-    def __init__(self, nn):
-        self.nn
-
-    def __call__(self, input_tensor):
-        pass
-
 class PaperLoss(nn.Module):
     def __init__(self):
         super(PaperLoss, self).__init__()

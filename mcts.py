@@ -1,10 +1,11 @@
 import time
-
 from checker import Checker
 import numpy as np
 import math
 from permatree import PermaTree
 import random
+from queue import Empty
+from neuralnetwork import states_to_batch_tensor
 
 
 # tree search does not check same node
@@ -16,10 +17,10 @@ class MCTS:
     page 2 right column paragraph 1).
     """
 
-    def __init__(self, parallel_nn, is_cuda):
+    def __init__(self, nn_execution_queue, is_cuda):
         self.checker = Checker()
         self.permaTree = PermaTree(self.checker, is_cuda)
-        self.parallel_nn = parallel_nn
+        self.nn_queue = nn_execution_queue
         # changes to False after the first 30 moves
         self.temperature = True
         self.temperature_change_at = 30
@@ -47,7 +48,7 @@ class MCTS:
                 if simulation % 40 == 0:
                     print("Simulation " + str(simulation) + " /" + str(simulations_per_play))
             t1 = time.time()
-            print("Time per search: " + str(t1 - t0))
+            print("Time per play: " + str(t1 - t0))
             terminal = self.play()
             if terminal:
                 break
@@ -55,9 +56,12 @@ class MCTS:
         # there will be an outcome whether the game reaches terminal or not
         final_state = self.permaTree.root.checker_state
         outcome = final_state.evaluate()
+
+        # TODO not continuous outcome currently
         if outcome == 0:
             z = 0
         else:
+            # truth table:
             #      flipped  not flipped
             # o>0    -1          1
             # o<0     1         -1
@@ -146,14 +150,17 @@ class MCTS:
         """
         # if the node is being expanded, then all of its children do not have value and probability, thus
         # select() must wait
-        node.expansion_lock.acquire()
-        node.expansion_lock.release()
+        # block if the first acquire does not open
+        # unblock if no lock on semaphore, where the values of the node has been assigned
+        node.lock.acquire()
+        node.lock.release()
+
         # argmax_input_list = contains a list of [Q(s,a)+U(s,a)] vals of all outbound edges of a node
         QU = []
         # every node/node should have a list of next possible actions
         # loop through all the child edges of a node
         if node.is_root():
-            sumnsb = 0
+            sumnsb = 1
             for edge in node.edges:
                 sumnsb += edge.visit_count
         else:
@@ -163,6 +170,9 @@ class MCTS:
             Nsa = edge.visit_count
             # Nsb = sum(edge.sibling_visit_count_list)  # does Nsb mean edge sibling visit count ? <verify>
             # u(s,a) = controls exploration
+            if edge.prior_probability is None:
+                print("RACE CONDITION")
+                print(node.is_root())
             Usa = (self.puct * edge.prior_probability * math.sqrt(sumnsb)) / (1 + Nsa)
             QU.append(edge.mean_action_value + Usa)
 
@@ -199,7 +209,7 @@ class MCTS:
         #     # self.permaTree.update(edge)
 
         # initialize value and probability of all children
-        leaf_node.assign_children_values_prior_p(self.parallel_nn)
+        leaf_node.put_children_on_nn_queue(self.nn_queue)
 
     def backup(self, leaf_node, v):
         """
@@ -228,10 +238,10 @@ class TimeStep:
         self.mcts_pi = mcts_pi
 
 
-if __name__ == '__main__':
-    from neuralnetwork import NoPolicy
-
-    nn = NoPolicy()
-    mcts = MCTS(nn)
-    mcts.play_until_terminal()
-    print(mcts.time_steps)
+# if __name__ == '__main__':
+#     from neuralnetwork import NoPolicy
+#
+#     nn = NoPolicy()
+#     mcts = MCTS(nn)
+#     mcts.play_until_terminal()
+#     print(mcts.time_steps)

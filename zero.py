@@ -14,7 +14,11 @@ import os
 from pathlib import Path
 from os.path import abspath
 import datetime
-
+from neuralnetwork import states_to_batch_tensor
+import numpy as np
+import time
+import queue
+import threading
 
 class AlphaZero:
     """
@@ -43,15 +47,33 @@ class AlphaZero:
         self.save_period = 1000
         self.log_file = "log/" + self.model_name + "_" + datetime_filename() + ".txt"
         self.refresh_period=10
+        self.eval_batch_size=512
+        self.debug=True
+        self.max_queue_size=256
 
-    def refresh_games(self):
+    def mcts_refresh_game(self):
         with torch.no_grad():
             self.nn.eval()
             self.time_steps = []
             for i in range(self.game_size):
-                mcts = MCTS(self.nn, self.is_cuda)
+                nn_thread_edge_queue = queue.Queue(maxsize=self.max_queue_size)
+                # def gpu_thread_worker(nn, queue, eval_batch_size, is_cuda):
+                gpu_thread = threading.Thread(target=gpu_thread_worker,
+                                              args=(self.nn, nn_thread_edge_queue,self.eval_batch_size, self.is_cuda))
+                gpu_thread.start()
+                mcts = MCTS(nn_thread_edge_queue, self.is_cuda)
                 mcts.play_until_terminal()
+                nn_thread_edge_queue.put(None)
+                print("Terminal sentinel is put on queue")
+                nn_thread_edge_queue.join()
+                if self.debug:
+                    print("Queue has joined")
+                gpu_thread.join()
+                if self.debug:
+                    print("Thread has joined")
                 self.time_steps += mcts.time_steps
+                print("Successful generation of one game")
+                print("Queue empty:", nn_thread_edge_queue.empty())
 
     def train_one_round(self):
         self.nn.train()
@@ -86,7 +108,7 @@ class AlphaZero:
         for epoch in range(self.total_epochs):
             for ti in range(self.train_period):
                 if ti % self.refresh_period==0:
-                    self.refresh_games()
+                    self.mcts_refresh_game()
                 train_loss = self.train_one_round()
                 if ti % self.print_period == 0:
                     self.log_print(
@@ -162,10 +184,55 @@ class AlphaZero:
         return computer, optim, highest_epoch, highest_iter
 
 
-
 def datetime_filename():
     return datetime.datetime.now().strftime("%m_%d_%X")
 
+def gpu_thread_worker(nn, edge_queue, eval_batch_size, is_cuda):
+    while True:
+        with torch.no_grad():
+            nn.eval()
+            edges = []
+            last_batch = False
+            for i in range(eval_batch_size):
+                try:
+                    edge = edge_queue.get_nowait()
+                    if edge is None:
+                        last_batch = True
+                        print("Sentinel received. GPU will process this batch and terminate afterwards")
+                    else:
+                        edges.append(edge)
+                except queue.Empty:
+                    pass
+            if len(edges) != 0:
+                # batch process
+                states = [edge.to_node.checker_state for edge in edges]
+                input_tensor = states_to_batch_tensor(states, is_cuda)
+                # this line is the bottleneck
+                value_tensor = nn(input_tensor)
+                p = nn.children_values_to_probability(value_tensor)
+                # GPU done, CPU begins
+                # prior probability
+                npp = p.cpu().numpy().tolist()
+                # value
+                value_array = value_tensor.cpu().numpy()
+                value_array = np.squeeze(value_array, axis=1)
+                value_list = value_array.tolist()
+                # assignment and lock open
+                for edx, edge in enumerate(edges):
+                    edge.value = value_list[edx]
+                    edge.prior_probability = npp[edx]
+                    edge_queue.task_done()
+                    edge.from_node.unassigned-=1
+                    if edge.from_node.unassigned==0:
+                        edge.from_node.lock.release()
+                if last_batch:
+                    edge_queue.task_done()
+                    print("Queue task done signal sent. Queue will join. Thread may still be running.")
+                    return
+            else:
+                time.sleep(0.1)
+
+
 if __name__ == '__main__':
     az=AlphaZero("first", is_cuda=True)
-    az.train()
+    az.mcts_refresh_game()
