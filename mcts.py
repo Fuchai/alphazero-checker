@@ -53,6 +53,7 @@ class MCTS:
                 print("Time per play: " + str(t1 - t0))
             terminal = self.play()
             if terminal:
+                print("Terminated at step", step)
                 break
 
         # there will be an outcome whether the game reaches terminal or not
@@ -141,8 +142,8 @@ class MCTS:
         self.backup(current_node, v)
         return l
 
-    def temperature_adjust(self, count):
-        return count ** (1 / self.temperature)
+    # def temperature_adjust(self, count):
+    #     return count ** (1 / self.temperature)
 
     def select(self, node):
         """
@@ -232,18 +233,14 @@ class MCTS:
     def print_root(self):
         self.permaTree.root.checker_state.print_board()
 
-
+# interfaces with the Zero
 class TimeStep:
     def __init__(self, checker_state, children_states, mcts_pi):
         self.checker_state = checker_state
         self.children_states = children_states
         self.mcts_pi = mcts_pi
+        self.z=None
 
-
-# if __name__ == '__main__':
-#     from neuralnetwork import NoPolicy
-#
-#     nn = NoPolicy()
-#     mcts = MCTS(nn)
-#     mcts.play_until_terminal()
-#     print(mcts.time_steps)
+        # neural network output ref holder
+        self.v=None
+        self.logits=None

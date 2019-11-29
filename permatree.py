@@ -106,6 +106,8 @@ class PermaNode:
     def put_children_on_nn_queue(self, nn_queue):
         """
         self is a leaf node that is being expanded
+        This function will asynchronously assign the child edge value and prior probability
+        A worker thread with neural network is constantly scanning the nn_queue to assign edges in batch
         :param parallel_nn_queue:
         :return:
         """

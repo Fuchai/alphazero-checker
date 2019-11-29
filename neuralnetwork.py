@@ -87,6 +87,17 @@ class NoPolicy(nn.Module):
         v2 = torch.tanh(v2)
         return v2
 
+    def policy_logit(self, input_tensor):
+        """
+        the policy logit here is just the values
+        :param input_tensor:
+        :return:
+        """
+        return self(input_tensor)
+
+    def logits_to_probability(self, children_logits):
+        return self.children_values_to_probability(children_logits)
+
     def children_values_to_probability(self, children_value_tensor):
         """
 
@@ -94,29 +105,39 @@ class NoPolicy(nn.Module):
         :return:
         """
         policy = torch.softmax(children_value_tensor, dim=0)
-        policy=policy.squeeze(1)
+        policy = policy.squeeze(1)
         return policy
+
 
 class PaperLoss(nn.Module):
     def __init__(self):
         super(PaperLoss, self).__init__()
-        self.l1=torch.nn.L1Loss()
-        self.lsm=nn.LogSoftmax()
+        self.l1 = torch.nn.L1Loss()
+        self.lsm = nn.LogSoftmax()
 
-    def forward(self,v,z,logit_p,pi, network):
-        return self.l1(v,z) - pi*self.lsm(logit_p)
+    def forward(self, v, z, logit_p, pi):
+        """
+
+        :param v: nn output value
+        :param z: the actual outcome of mcts simulated game
+        :param logit_p: the nn output logits
+        :param pi: the mcts target pi
+        :return:
+        """
+        return self.l1(v, z) - pi * self.lsm(logit_p)
 
 
 def states_to_batch_tensor(states, is_cuda):
-    np_arrays=[]
+    np_arrays = []
     for state in states:
         np_arrays.append(binary_board(state.board))
     if is_cuda:
-        tensors=[torch.Tensor(array).cuda() for array in np_arrays]
+        tensors = [torch.Tensor(array).cuda() for array in np_arrays]
     else:
-        tensors=[torch.Tensor(array) for array in np_arrays]
+        tensors = [torch.Tensor(array) for array in np_arrays]
 
     return torch.stack(tensors)
+
 
 def binary_board(board):
     # a checker board is represented with 2,1,0,-1,-2
@@ -129,13 +150,15 @@ def binary_board(board):
     ret = np.stack((two, one, negone, negtwo))
     return ret.astype(np.uint8)
 
-def batch_board_tensor(board_list,is_cuda):
+
+def batch_board_tensor(board_list, is_cuda):
     if is_cuda:
-        batch_tensor=[torch.Tensor(binary_board(board)).cuda() for board in board_list]
+        batch_tensor = [torch.Tensor(binary_board(board)).cuda() for board in board_list]
     else:
-        batch_tensor=[torch.Tensor(binary_board(board)) for board in board_list]
-    ret=torch.stack(batch_tensor)
+        batch_tensor = [torch.Tensor(binary_board(board)) for board in board_list]
+    ret = torch.stack(batch_tensor)
     return ret
+
 
 class BoardWrapper():
     def __init__(self, nparray):
@@ -148,7 +171,7 @@ class BoardWrapper():
 def main_example_1():
     i = torch.Tensor(np.random.rand(16, 4, 8, 8))
     nn = NoPolicy()
-    ret=nn(i)
+    ret = nn(i)
     print(ret)
     print(ret.shape)
 
@@ -162,12 +185,10 @@ def main_example_2():
                            [0, 0, 0, 0, 0, 0, 0, 0],
                            [-1, 0, 0, 0, 0, 0, -1, 0],
                            [0, 0, 0, 0, 0, 0, 0, 2]])
-    fake_boards=[fake_board]*16
+    fake_boards = [fake_board] * 16
     board_array = batch_board_tensor(fake_boards)
     print(board_array)
     print(board_array.shape)
-
-
 
 
 if __name__ == '__main__':
