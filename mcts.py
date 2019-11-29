@@ -17,7 +17,7 @@ class MCTS:
     page 2 right column paragraph 1).
     """
 
-    def __init__(self, nn_execution_queue, is_cuda):
+    def __init__(self, nn_execution_queue, is_cuda, simulations_per_play, debug):
         self.checker = Checker()
         self.permaTree = PermaTree(self.checker, is_cuda)
         self.nn_queue = nn_execution_queue
@@ -25,9 +25,11 @@ class MCTS:
         self.temperature = True
         self.temperature_change_at = 30
         self.puct = 0.1
-        self.max_game_length = 200
+        self.max_game_length = 20
         self.time_steps = []
         self.is_cuda = is_cuda
+        self.simulations_per_play = simulations_per_play
+        self.debug=debug
 
     def play_until_terminal(self):
         """
@@ -37,18 +39,18 @@ class MCTS:
         :return:
         """
         for step in range(self.max_game_length):
-            if step % 10 == 0:
+            if step % 10 == 0 and self.debug:
                 print("Game step " + str(step) + " /" + str(self.max_game_length))
-            simulations_per_play = 50
             if step == self.temperature_change_at:
                 self.temperature = False
             t0 = time.time()
-            for simulation in range(simulations_per_play):
+            for simulation in range(self.simulations_per_play):
                 self.simulation()
-                if simulation % 40 == 0:
-                    print("Simulation " + str(simulation) + " /" + str(simulations_per_play))
+                if simulation % 40 == 0 and self.debug:
+                    print("Simulation " + str(simulation) + " /" + str(self.simulations_per_play))
             t1 = time.time()
-            print("Time per play: " + str(t1 - t0))
+            if self.debug:
+                print("Time per play: " + str(t1 - t0))
             terminal = self.play()
             if terminal:
                 break
@@ -118,7 +120,7 @@ class MCTS:
             print("Terminated due to peaceful activity")
             return 2
 
-        self.time_steps.append(TimeStep(root.checker_state, root.get_children_checker_states, pi))
+        self.time_steps.append(TimeStep(root.checker_state, root.get_children_checker_states(), pi))
 
     def simulation(self):
         """

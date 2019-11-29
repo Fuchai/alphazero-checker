@@ -101,7 +101,7 @@ class PermaNode:
         return False
 
     def get_children_checker_states(self):
-        return (edge.to_node.checker_state for edge in self.edges)
+        return [edge.to_node.checker_state for edge in self.edges]
 
     def put_children_on_nn_queue(self, nn_queue):
         """

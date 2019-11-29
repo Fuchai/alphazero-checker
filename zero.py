@@ -36,10 +36,10 @@ class AlphaZero:
         # TODO
         self.loss = PaperLoss()
         self.optim = torch.optim.Adam(self.nn.parameters(), weight_decay=0.01)
-        self.batch_size = 16
+        self.training_batch_size = 16
         # time steps contain up to self.game_size different games.
         self.time_steps = []
-        self.game_size = 4
+        self.game_size = 2
         self.total_epochs = 20
         self.train_period = 2000
         self.validation_period = 100
@@ -47,7 +47,9 @@ class AlphaZero:
         self.save_period = 1000
         self.log_file = "log/" + self.model_name + "_" + datetime_filename() + ".txt"
         self.refresh_period=10
-        self.eval_batch_size=512
+        self.simulations_per_play=200
+        # this is a tuned parameter, do not change
+        self.eval_batch_size=25600//self.simulations_per_play
         self.debug=True
         self.max_queue_size=256
 
@@ -61,7 +63,7 @@ class AlphaZero:
                 gpu_thread = threading.Thread(target=gpu_thread_worker,
                                               args=(self.nn, nn_thread_edge_queue,self.eval_batch_size, self.is_cuda))
                 gpu_thread.start()
-                mcts = MCTS(nn_thread_edge_queue, self.is_cuda)
+                mcts = MCTS(nn_thread_edge_queue, self.is_cuda, self.simulations_per_play, self.debug)
                 mcts.play_until_terminal()
                 nn_thread_edge_queue.put(None)
                 print("Terminal sentinel is put on queue")
@@ -75,34 +77,6 @@ class AlphaZero:
                 print("Successful generation of one game")
                 print("Queue empty:", nn_thread_edge_queue.empty())
 
-    def train_one_round(self):
-        self.nn.train()
-        # sample self.batch_size number of time steps, bundle them together
-        self.batch_tss = random.choices(self.time_steps, k=self.batch_size)
-        input, target = self.time_steps_to_tensor(self.batch_tss)
-        output = self.nn(input)
-        loss = self.loss(output, target)
-        loss.backward()
-        self.optim.step()
-        return loss.data
-
-    def validation(self):
-        with torch.no_grad():
-            self.nn.eval()
-            validation_time_steps = []
-            for i in range(self.game_size):
-                mcts = MCTS(self.nn)
-                mcts.play_until_terminal()
-                validation_time_steps += mcts.time_steps
-            self.batch_tss = random.choices(validation_time_steps, k=self.batch_size)
-            input, target = self.time_steps_to_tensor(self.batch_tss)
-            output = self.nn(input)
-            loss = self.loss(output, target)
-            return loss.data
-
-    def time_steps_to_tensor(self, batch_tss):
-        # TODO
-        return None
 
     def train(self):
         for epoch in range(self.total_epochs):
@@ -118,6 +92,42 @@ class AlphaZero:
                 if ti % self.validation_period == 0:
                     self.validation()
 
+
+    def train_one_round(self):
+        self.nn.train()
+        # sample self.batch_size number of time steps, bundle them together
+        batch_tss = random.choices(self.time_steps, k=self.training_batch_size)
+        input, target = self.time_steps_to_tensor(batch_tss)
+        output = self.nn(input)
+        loss = self.loss(output, target)
+        loss.backward()
+        self.optim.step()
+        return loss.data
+
+    def validation(self):
+        with torch.no_grad():
+            self.nn.eval()
+            validation_time_steps = []
+            for i in range(self.game_size):
+                mcts = MCTS(self.nn)
+                mcts.play_until_terminal()
+                validation_time_steps += mcts.time_steps
+            self.batch_tss = random.choices(validation_time_steps, k=self.training_batch_size)
+            input, target = self.time_steps_to_tensor(self.batch_tss)
+            output = self.nn(input)
+            loss = self.loss(output, target)
+            return loss.data
+
+    def time_steps_to_tensor(self, batch_tss):
+        # what is the strategy for training time neural network call?
+        # I suppose we should do one pass on all values, then we do passes over the probabilities
+        # sometimes a batch represent different time steps
+        # sometimes a batch represents the same time step but different children of the time step
+        # cast and view bonanza.
+        # keep track of the loss coefficient.
+        # beware not to keep too many boards in the memory at once: when doing probability, do n boards at once
+        # TODO
+        return None
 
 
     def log_print(self, message):
@@ -203,6 +213,7 @@ def gpu_thread_worker(nn, edge_queue, eval_batch_size, is_cuda):
                         edges.append(edge)
                 except queue.Empty:
                     pass
+
             if len(edges) != 0:
                 # batch process
                 states = [edge.to_node.checker_state for edge in edges]
@@ -225,14 +236,15 @@ def gpu_thread_worker(nn, edge_queue, eval_batch_size, is_cuda):
                     edge.from_node.unassigned-=1
                     if edge.from_node.unassigned==0:
                         edge.from_node.lock.release()
-                if last_batch:
-                    edge_queue.task_done()
-                    print("Queue task done signal sent. Queue will join. Thread may still be running.")
-                    return
             else:
                 time.sleep(0.1)
+
+            if last_batch:
+                edge_queue.task_done()
+                print("Queue task done signal sent. Queue will join. Thread may still be running.")
+                return
 
 
 if __name__ == '__main__':
     az=AlphaZero("first", is_cuda=True)
-    az.mcts_refresh_game()
+    az.train()
