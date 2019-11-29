@@ -35,7 +35,7 @@ class AlphaZero:
         self.batch_size = 16
         # time steps contain up to self.game_size different games.
         self.time_steps = []
-        self.game_size = 10
+        self.game_size = 4
         self.total_epochs = 20
         self.train_period = 2000
         self.validation_period = 100

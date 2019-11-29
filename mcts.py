@@ -16,10 +16,10 @@ class MCTS:
     page 2 right column paragraph 1).
     """
 
-    def __init__(self, nn, is_cuda):
+    def __init__(self, parallel_nn, is_cuda):
         self.checker = Checker()
         self.permaTree = PermaTree(self.checker, is_cuda)
-        self.nn = nn
+        self.parallel_nn = parallel_nn
         # changes to False after the first 30 moves
         self.temperature = True
         self.temperature_change_at = 30
@@ -51,25 +51,21 @@ class MCTS:
             terminal = self.play()
             if terminal:
                 break
-        if terminal == 2:
-            # no capture
+
+        # there will be an outcome whether the game reaches terminal or not
+        final_state = self.permaTree.root.checker_state
+        outcome = final_state.evaluate()
+        if outcome == 0:
             z = 0
         else:
-            # no moves or no capture
-            # there will be an outcome whether the game reaches terminal or not
-            final_state = self.permaTree.root.checker_state
-            outcome = final_state.evaluate()
-            if outcome == 0:
-                z = 0
-            else:
-                #      flipped  not flipped
-                # o>0    -1          1
-                # o<0     1         -1
+            #      flipped  not flipped
+            # o>0    -1          1
+            # o<0     1         -1
 
-                a = final_state.flipped
-                b = outcome > 0
-                z = a ^ b
-                z = z * 2 - 1
+            a = final_state.flipped
+            b = outcome > 0
+            z = a ^ b
+            z = z * 2 - 1
 
         # assign z
         for ts in self.time_steps:
@@ -148,6 +144,10 @@ class MCTS:
         :param node:
         :return:
         """
+        # if the node is being expanded, then all of its children do not have value and probability, thus
+        # select() must wait
+        node.expansion_lock.acquire()
+        node.expansion_lock.release()
         # argmax_input_list = contains a list of [Q(s,a)+U(s,a)] vals of all outbound edges of a node
         QU = []
         # every node/node should have a list of next possible actions
@@ -199,7 +199,7 @@ class MCTS:
         #     # self.permaTree.update(edge)
 
         # initialize value and probability of all children
-        leaf_node.assign_children_values_prior_p(self.nn)
+        leaf_node.assign_children_values_prior_p(self.parallel_nn)
 
     def backup(self, leaf_node, v):
         """
