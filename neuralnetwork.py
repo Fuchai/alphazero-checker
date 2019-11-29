@@ -124,7 +124,8 @@ class PaperLoss(nn.Module):
         :param pi: the mcts target pi
         :return:
         """
-        return self.l1(v, z) - pi * self.lsm(logit_p)
+        ret=self.l1(v, z) - torch.sum(pi * self.lsm(logit_p))
+        return ret
 
 
 def states_to_batch_tensor(states, is_cuda):

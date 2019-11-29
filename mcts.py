@@ -17,7 +17,7 @@ class MCTS:
     page 2 right column paragraph 1).
     """
 
-    def __init__(self, nn_execution_queue, is_cuda, simulations_per_play, debug):
+    def __init__(self, nn_execution_queue, is_cuda, max_game_length, simulations_per_play, debug):
         self.checker = Checker()
         self.permaTree = PermaTree(self.checker, is_cuda)
         self.nn_queue = nn_execution_queue
@@ -25,7 +25,7 @@ class MCTS:
         self.temperature = True
         self.temperature_change_at = 30
         self.puct = 0.1
-        self.max_game_length = 20
+        self.max_game_length = max_game_length
         self.time_steps = []
         self.is_cuda = is_cuda
         self.simulations_per_play = simulations_per_play
@@ -238,7 +238,7 @@ class TimeStep:
     def __init__(self, checker_state, children_states, mcts_pi):
         self.checker_state = checker_state
         self.children_states = children_states
-        self.mcts_pi = mcts_pi
+        self.pi = mcts_pi
         self.z=None
 
         # neural network output ref holder

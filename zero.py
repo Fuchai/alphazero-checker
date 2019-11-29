@@ -29,6 +29,7 @@ class AlphaZero:
     """
 
     def __init__(self, model_name, is_cuda=True):
+        # NEURAL NETWORK
         self.model_name = model_name
         self.nn = NoPolicy()
         self.is_cuda = is_cuda
@@ -39,20 +40,23 @@ class AlphaZero:
         self.optim = torch.optim.Adam(self.nn.parameters(), weight_decay=0.01)
         # control how many time steps each loss.backwards() is called for.
         # controls the GPU memory allocation
-        self.training_time_step_batch_size = 16
+        self.training_time_step_batch_size = 2 #16
         # controls how many boards is fed into a neural network at once
         # controls the speed of gpu computation.
         self.neural_network_batch_size = 128
         # time steps contain up to self.game_size different games.
         self.time_steps = []
         self.game_size = 2
-        self.total_epochs = 20
-        self.train_period = 2000
+        self.total_game_refresh = 20
+        self.reuse_game_interval = 2000
         self.validation_period = 100
         self.print_period = 10
         self.save_period = 1000
         self.log_file = "log/" + self.model_name + "_" + datetime_filename() + ".txt"
         self.refresh_period = 10
+
+        # Pass to MCTS and other methods
+        self.max_game_length=5
         self.simulations_per_play = 200
         # this is a tuned parameter, do not change
         self.eval_batch_size = 25600 // self.simulations_per_play
@@ -69,7 +73,7 @@ class AlphaZero:
                 gpu_thread = threading.Thread(target=gpu_thread_worker,
                                               args=(self.nn, nn_thread_edge_queue, self.eval_batch_size, self.is_cuda))
                 gpu_thread.start()
-                mcts = MCTS(nn_thread_edge_queue, self.is_cuda, self.simulations_per_play, self.debug)
+                mcts = MCTS(nn_thread_edge_queue, self.is_cuda, self.max_game_length, self.simulations_per_play, self.debug)
                 mcts.play_until_terminal()
                 nn_thread_edge_queue.put(None)
                 print("Terminal sentinel is put on queue")
@@ -84,10 +88,9 @@ class AlphaZero:
                 print("Queue empty:", nn_thread_edge_queue.empty())
 
     def train(self):
-        for epoch in range(self.total_epochs):
-            for ti in range(self.train_period):
-                if ti % self.refresh_period == 0:
-                    self.mcts_refresh_game()
+        for epoch in range(self.total_game_refresh):
+            self.mcts_refresh_game()
+            for ti in range(self.reuse_game_interval):
                 train_loss = self.train_one_round()
                 if ti % self.print_period == 0:
                     self.log_print(
@@ -103,30 +106,29 @@ class AlphaZero:
     def train_one_round(self):
         self.nn.train()
         # sample self.batch_size number of time steps, bundle them together
-        batch_tss = random.choices(self.time_steps, k=self.training_time_step_batch_size)
+        sampled_tss = random.sample(self.time_steps, k=self.training_time_step_batch_size)
 
         # compile value tensor
-        value_batches = len(batch_tss) // self.neural_network_batch_size
-        values_outputs = []
+        value_batches = len(sampled_tss) // self.neural_network_batch_size +1
         for batch_idx in range(value_batches):
-            value_inputs = batch_tss[
-                batch_idx * self.neural_network_batch_size, (batch_idx + 1) * self.neural_network_batch_size]
-            value_inputs = [ts.checker_state for ts in value_inputs]
+            batch_tss = sampled_tss[
+                batch_idx * self.neural_network_batch_size: (batch_idx + 1) * self.neural_network_batch_size]
+            value_inputs = [ts.checker_state for ts in batch_tss]
             value_tensor = states_to_batch_tensor(value_inputs, is_cuda=self.is_cuda)
             value_output = self.nn(value_tensor)
-            values_outputs.append(value_output)
-        # TODO is this function call correct?
-        value_output = torch.cat(values_outputs, dim=0)
+            for tsidx, ts in enumerate(batch_tss):
+                # TODO check indices
+                ts.v=value_output[tsidx]
 
         # compile policy tensor
         # queue up children_states
         # slice output tensor
-        tss_policy_output = {}
+        # tss_policy_output = {}
         #
         policy_inputs_queue = []
         dim_ts = []
-        for ts in batch_tss:
-            tss_policy_output[ts] = []
+        for ts in sampled_tss:
+            ts.logits = []
             for child in ts.children_states:
                 if len(policy_inputs_queue) != self.neural_network_batch_size:
                     # queue up
@@ -134,24 +136,33 @@ class AlphaZero:
                     policy_inputs_queue.append(child)
                 else:
                     ### process
-                    self.policy_bonanza(policy_inputs_queue, dim_ts, tss_policy_output)
+                    self.policy_bonanza(policy_inputs_queue, dim_ts)
                     policy_inputs_queue = []
                     dim_ts = []
         # remnant in the queue
-        self.policy_bonanza(policy_inputs_queue, dim_ts, tss_policy_output)
+        self.policy_bonanza(policy_inputs_queue, dim_ts)
 
         # policy transpose
+        for ts in sampled_tss:
+            # TODO check indices
+            ts.logits=torch.cat(ts.logits)
+
+        # loss calculation
         loss=0
-        for ts in batch_tss:
-            logits=torch.cat(tss_policy_output[ts])
-            p=self.nn.logits_to_probability(logits)
-            loss += self.loss_fn(ts.z, target)
+        for ts in sampled_tss:
+            # should we reinitialize every time or store them?
+            z=torch.Tensor([ts.z])
+            pi=torch.Tensor(ts.pi)
+            if self.is_cuda:
+                z=z.cuda()
+                pi=pi.cuda()
+            loss += self.loss_fn(ts.v, z, ts.logits, pi)
         loss.backward()
         self.optim.step()
-        return loss.data
+        return loss.item()
 
-    def policy_bonanza(self, policy_inputs_queue, dim_ts, tss_policy_output):
-        policy_tensor = states_to_batch_tensor(policy_inputs_queue)
+    def policy_bonanza(self, policy_inputs_queue, dim_ts):
+        policy_tensor = states_to_batch_tensor(policy_inputs_queue, self.is_cuda)
         policy_output = self.nn.policy_logit(policy_tensor)
         # slice and append
         last_ts = None
@@ -160,12 +171,16 @@ class AlphaZero:
             if ts != last_ts:
                 if last_ts is not None:
                     # slice the policy output
-                    # TODO check the slicing operation
-                    tss_policy_output[ts].append(policy_output[tsbegin: ts, :, :])
+                    # not including tsidx
+                    last_ts.logits.append(policy_output[tsbegin: tsidx, :])
+                    # tss_policy_output[ts].append(policy_output[tsbegin: ts, :, :])
                 last_ts = ts
-                tsbegin = ts
+                tsbegin = tsidx
         # take care of the last ones
-        tss_policy_output[ts].append(policy_output[tsbegin: ts, :, :])
+        # tss_policy_output[ts].append(policy_output[tsbegin: ts, :, :])
+        # including tsidx
+        assert(tsidx+1==len(dim_ts))
+        ts.logits.append(policy_output[tsbegin: tsidx+1, :])
 
     def validation(self):
         with torch.no_grad():
