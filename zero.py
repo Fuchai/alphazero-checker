@@ -5,7 +5,7 @@
 # We need to design the asynchronous behavior.
 
 from mcts import MCTS, TimeStep
-from neuralnetwork import NoPolicy, PaperLoss
+from neuralnetwork import NoPolicy, PaperLoss, YesPolicy
 import random
 import torch
 import torch.optim
@@ -31,7 +31,7 @@ class AlphaZero:
     def __init__(self, model_name, is_cuda=True):
         # NEURAL NETWORK
         self.model_name = model_name
-        self.nn = NoPolicy()
+        self.nn = YesPolicy()
         self.is_cuda = is_cuda
         if self.is_cuda:
             self.nn = self.nn.cuda()
@@ -46,7 +46,7 @@ class AlphaZero:
         self.neural_network_batch_size = 128
         # time steps contain up to self.game_size different games.
         self.time_steps = []
-        self.game_size = 2
+        self.game_size = 8
         self.total_game_refresh = 20
         self.reuse_game_interval = 2000
         self.validation_period = 100
@@ -57,12 +57,17 @@ class AlphaZero:
         self.refresh_period = 10
 
         # Pass to MCTS and other methods
-        self.max_game_length = 5
+        self.max_game_length = 200
         self.simulations_per_play = 200
         # this is a tuned parameter, do not change
         self.eval_batch_size = 25600 // self.simulations_per_play
         self.debug = True
         self.max_queue_size = self.eval_batch_size * 2
+
+    def fast_settings(self):
+        self.max_game_length=4
+        self.simulations_per_play=10
+        self.game_size=2
 
     def mcts_refresh_game(self):
         with torch.no_grad():
@@ -299,22 +304,36 @@ def gpu_thread_worker(nn, edge_queue, eval_batch_size, is_cuda):
                 states = [edge.to_node.checker_state for edge in edges]
                 input_tensor = states_to_batch_tensor(states, is_cuda)
                 # this line is the bottleneck
-                value_tensor = nn(input_tensor)
-                p = nn.children_values_to_probability(value_tensor)
-                # GPU done, CPU begins
-                # prior probability
-                npp = p.cpu().numpy().tolist()
+                if isinstance(nn, YesPolicy):
+                    value_tensor, logits_tensor = nn(input_tensor)
+
+                else:
+                    value_tensor = nn(input_tensor)
+
                 # value
                 value_array = value_tensor.cpu().numpy()
                 value_array = np.squeeze(value_array, axis=1)
                 value_list = value_array.tolist()
-                # assignment and lock open
+                if isinstance(nn, YesPolicy):
+                    # logits
+                    logit_array = logits_tensor.cpu().numpy()
+                    logit_array = np.squeeze(logit_array, axis=1)
+                    logit_list = logit_array.tolist()
+                else:
+                    logit_list = value_list
+
                 for edx, edge in enumerate(edges):
                     edge.value = value_list[edx]
-                    edge.prior_probability = npp[edx]
+                    edge.logit = logit_list[edx]
                     edge_queue.task_done()
                     edge.from_node.unassigned -= 1
                     if edge.from_node.unassigned == 0:
+                        # probability
+                        prob_tensor=nn.logits_to_probability(torch.Tensor([c.logit for c in edge.from_node.edges]))
+                        prob_array = prob_tensor.numpy()
+                        prob_list = prob_array.tolist()
+                        for ic, c in enumerate(edge.from_node.edges):
+                            c.prior_probability=prob_list[ic]
                         edge.from_node.lock.release()
             else:
                 time.sleep(0.1)

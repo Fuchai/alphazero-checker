@@ -22,8 +22,28 @@ class ResBlock(nn.Module):
         out6 = torch.relu(out5)
         return out6
 
+class Model(nn.Module):
+    def __init__(self):
+        super(Model, self).__init__()
 
-class NoPolicy(nn.Module):
+
+    def weights_init(self):
+        def init_weights(m):
+            if isinstance(m, nn.Conv2d):
+                torch.nn.init.xavier_uniform_(m.weight.data)
+                m.bias.data.fill_(0.01)
+            if type(m) == nn.Linear:
+                torch.nn.init.xavier_uniform_(m.weight)
+                m.bias.data.fill_(0.01)
+        self.apply(init_weights)
+
+    def logits_to_probability(self, children_logits):
+        policy = torch.softmax(children_logits, dim=0)
+        return policy
+
+
+
+class NoPolicy(Model):
     """
     Modified for checker.
     """
@@ -96,28 +116,82 @@ class NoPolicy(nn.Module):
         """
         return self(input_tensor)
 
-    def logits_to_probability(self, children_logits):
-        return self.children_values_to_probability(children_logits)
 
     def children_values_to_probability(self, children_value_tensor):
         """
 
-        :param children_value_tensors: Must be tensors, because it needs to receive gradient at backup.
+        :param children_value_tensor: Must be tensor, because it needs to receive gradient at backup.
         :return:
         """
-        policy = torch.softmax(children_value_tensor, dim=0)
-        policy = policy.squeeze(1)
-        return policy
+        return self.logits_to_probability(children_value_tensor)
 
-    def weights_init(self):
-        def init_weights(m):
-            if isinstance(m, nn.Conv2d):
-                torch.nn.init.xavier_uniform_(m.weight.data)
-                m.bias.data.fill_(0.01)
-            if type(m) == nn.Linear:
-                torch.nn.init.xavier_uniform_(m.weight)
-                m.bias.data.fill_(0.01)
-        self.apply(init_weights)
+class YesPolicy(Model):
+    def __init__(self):
+        scale = 64
+        tower_len = 9
+        super(YesPolicy, self).__init__()
+        self.conv1 = nn.Conv2d(4, scale, 3, padding=1)
+        self.bn1 = nn.BatchNorm2d(scale)
+        self.tower = nn.ModuleList([ResBlock(scale)] * tower_len)
+        self.policy_linear_1 = nn.Linear(1 * 8 * 8, scale * 2)
+        self.policy_linear_2 = nn.Linear(scale * 2, 1)
+        self.value_linear_1 = nn.Linear(1 * 8 * 8, scale * 2)
+        self.value_linear_2 = nn.Linear(scale * 2, 1)
+
+        # a rework that includes the policy head.
+        self.policy_head = nn.Sequential(
+            nn.Conv2d(scale, 1, 1),
+            nn.BatchNorm2d(1),
+            nn.ReLU(),
+        )
+
+        self.value_head = nn.Sequential(
+            nn.Conv2d(scale, 1, 1),
+            nn.BatchNorm2d(1),
+            nn.ReLU(),
+        )
+        self.weights_init()
+
+    def forward(self, input_tensor):
+        """
+        the (p,v)=f_theta(s) function
+        f_theta=NeuralNetwork()
+        p,v=f_theta(state)
+
+        A second design
+
+        :param input_tensor: a batch tensor
+        :return: value of the state
+        """
+        out = self.conv1(input_tensor)
+        out1 = self.bn1(out)
+        out2 = torch.relu(out1)
+        for res in self.tower:
+            out3 = res(out2)
+
+        p = self.policy_head(out3)
+        p2 = p.reshape(p.shape[0],-1)
+        p2 = self.policy_linear_1(p2)
+        p2 = torch.relu(p2)
+        p2 = self.policy_linear_2(p2)
+        p2 = torch.tanh(p2)
+
+        v = self.value_head(out3)
+        v1 = v.reshape(v.shape[0], -1)
+        v2 = self.value_linear_1(v1)
+        v2 = torch.relu(v2)
+        v2 = self.value_linear_2(v2)
+        v2 = torch.tanh(v2)
+        return p2,v2
+
+    def policy_logit(self, input_tensor):
+        """
+        the policy logit here is just the values
+        :param input_tensor:
+        :return:
+        """
+        return self(input_tensor, True)
+
 
 
 class PaperLoss(nn.Module):

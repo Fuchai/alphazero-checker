@@ -155,7 +155,14 @@ class MCTS:
         # select() must wait
         # block if the first acquire does not open
         # unblock if no lock on semaphore, where the values of the node has been assigned
+
+        # this acquire blocks for quite a while to wait for the gpu thread to return answer,
+        # we should share some of the tasks
+        # let's release the lock when logits are ready, but probability might not be computed
         node.lock.acquire()
+        if not node.probability_ready:
+            # TODO compute probability
+            pass
         node.lock.release()
 
         # argmax_input_list = contains a list of [Q(s,a)+U(s,a)] vals of all outbound edges of a node

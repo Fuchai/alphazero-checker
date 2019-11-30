@@ -44,12 +44,14 @@ class PermaEdge:
         # self.to_node = None  # create new child node in expand() and update this
 
         # # these values are initialized at expand() and updated in backup()
-        self.prior_probability = None
         self.visit_count = 0
         self.total_action_value = 0
         self.mean_action_value = 0
+        # from neural network queue
         self.value = None
-        # side effect, initialize the node that the edge points to
+        self.logit = None
+        # computed after the from_node is ready
+        self.prior_probability = None
 
     def checker_to_tensor(self):
         return binary_board(self.to_node.checker_state.board)
@@ -74,9 +76,10 @@ class PermaNode:
         self.from_edge = from_edge
         # adjacency list implementation
         self.edges = []
-        # locked if the children are being evaluated by the neural network or selection is in progress
+        # locked if the children prior probability is being calculated by the neural network or selection is in progress
         self.lock = Lock()
         self.unassigned=0
+        self.probability_ready=False
         perma_tree.node_count += 1
 
     def is_leaf(self):
