@@ -6,7 +6,7 @@ from permatree import PermaTree
 import random
 from queue import Empty
 from neuralnetwork import states_to_batch_tensor
-
+import torch
 
 # tree search does not check same node
 # algorithm
@@ -17,14 +17,15 @@ class MCTS:
     page 2 right column paragraph 1).
     """
 
-    def __init__(self, nn_execution_queue, is_cuda, max_game_length, simulations_per_play, debug):
+    def __init__(self, nn_execution_queue, nn, is_cuda, max_game_length, simulations_per_play, debug):
         self.checker = Checker()
         self.permaTree = PermaTree(self.checker, is_cuda)
         self.nn_queue = nn_execution_queue
+        self.nn=nn
         # changes to False after the first 30 moves
         self.temperature = True
         self.temperature_change_at = 30
-        self.puct = 0.1
+        self.puct = 10000
         self.max_game_length = max_game_length
         self.time_steps = []
         self.is_cuda = is_cuda
@@ -39,17 +40,18 @@ class MCTS:
         :return:
         """
         for step in range(self.max_game_length):
-            if step % 10 == 0 and self.debug:
-                print("Game step " + str(step) + " /" + str(self.max_game_length))
+            # if step % 10 == 0:
+            print("Game step " + str(step) + " /" + str(self.max_game_length))
             if step == self.temperature_change_at:
                 self.temperature = False
-            t0 = time.time()
+            if self.debug:
+                t0 = time.time()
             for simulation in range(self.simulations_per_play):
                 self.simulation()
-                if simulation % 40 == 0 and self.debug:
-                    print("Simulation " + str(simulation) + " /" + str(self.simulations_per_play))
-            t1 = time.time()
+                # if simulation % 40 == 0 and self.debug:
+                    # print("Simulation " + str(simulation) + " /" + str(self.simulations_per_play))
             if self.debug:
+                t1 = time.time()
                 print("Time per play: " + str(t1 - t0))
             terminal = self.play()
             if terminal:
@@ -161,8 +163,19 @@ class MCTS:
         # let's release the lock when logits are ready, but probability might not be computed
         node.lock.acquire()
         if not node.probability_ready:
-            # TODO compute probability
-            pass
+            # COMMENT THIS OUT TO USE OLD FUNCTION
+            for edge in node.edges:
+                edge.value=edge.value.item()
+                edge.logit=edge.logit.item()
+            # COMMENT THIS OUT TO USE OLD FUNCTION
+
+            # probability
+            prob_tensor = self.nn.logits_to_probability(torch.Tensor([edge.logit for edge in node.edges]))
+            prob_array = prob_tensor.numpy()
+            prob_list = prob_array.tolist()
+            for ie, edge in enumerate(node.edges):
+                edge.prior_probability = prob_list[ie]
+            node.probability_ready=True
         node.lock.release()
 
         # argmax_input_list = contains a list of [Q(s,a)+U(s,a)] vals of all outbound edges of a node

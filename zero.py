@@ -62,7 +62,7 @@ class AlphaZero:
         # this is a tuned parameter, do not change
         self.eval_batch_size = 25600 // self.simulations_per_play
         self.debug = True
-        self.max_queue_size = self.eval_batch_size * 2
+        self.max_queue_size = self.eval_batch_size//2
 
     def fast_settings(self):
         self.max_game_length=4
@@ -79,11 +79,12 @@ class AlphaZero:
                 gpu_thread = threading.Thread(target=gpu_thread_worker,
                                               args=(self.nn, nn_thread_edge_queue, self.eval_batch_size, self.is_cuda))
                 gpu_thread.start()
-                mcts = MCTS(nn_thread_edge_queue, self.is_cuda, self.max_game_length, self.simulations_per_play,
+                mcts = MCTS(nn_thread_edge_queue, self.nn, self.is_cuda,
+                            self.max_game_length, self.simulations_per_play,
                             self.debug)
                 mcts.play_until_terminal()
                 nn_thread_edge_queue.put(None)
-                print("Terminal sentinel is put on queue")
+                # print("Terminal sentinel is put on queue")
                 nn_thread_edge_queue.join()
                 if self.debug:
                     print("Queue has joined")
@@ -281,6 +282,68 @@ class AlphaZero:
 def datetime_filename():
     return datetime.datetime.now().strftime("%m-%d-%H-%M-%S")
 
+# spread more work to main thread
+# def gpu_thread_worker(nn, edge_queue, eval_batch_size, is_cuda):
+#     while True:
+#         with torch.no_grad():
+#             nn.eval()
+#             edges = []
+#             last_batch = False
+#             for i in range(eval_batch_size):
+#                 if edge_queue.empty():
+#                     break
+#                 try:
+#                     edge = edge_queue.get_nowait()
+#                     if edge is None:
+#                         last_batch = True
+#                         # print("Sentinel received. GPU will process this batch and terminate afterwards")
+#                     else:
+#                         edges.append(edge)
+#                 except queue.Empty:
+#                     pass
+#
+#             if len(edges) != 0:
+#                 # batch process
+#                 states = [edge.to_node.checker_state for edge in edges]
+#                 input_tensor = states_to_batch_tensor(states, is_cuda)
+#                 # this line is the bottleneck
+#                 if isinstance(nn, YesPolicy):
+#                     value_tensor, logits_tensor = nn(input_tensor)
+#
+#                 else:
+#                     value_tensor = nn(input_tensor)
+#
+#                 # # value
+#                 # value_array = value_tensor.cpu().numpy()
+#                 # value_array = np.squeeze(value_array, axis=1)
+#                 # value_list = value_array.tolist()
+#                 # if isinstance(nn, YesPolicy):
+#                 #     # logits
+#                 #     logit_array = logits_tensor.cpu().numpy()
+#                 #     logit_array = np.squeeze(logit_array, axis=1)
+#                 #     logit_list = logit_array.tolist()
+#                 # else:
+#                 #     logit_list = value_list
+#
+#                 for edx, edge in enumerate(edges):
+#                     edge.value = value_tensor[edx, 0].item()
+#                     if isinstance(nn, YesPolicy):
+#                         edge.logit = logits_tensor[edx,0].item()
+#                     else:
+#                         edge.logit = value_tensor[edx,0].item()
+#                     edge_queue.task_done()
+#                     edge.from_node.unassigned -= 1
+#                     if edge.from_node.unassigned == 0:
+#                         edge.from_node.lock.release()
+#             else:
+#                 time.sleep(0.1)
+#
+#             if last_batch:
+#                 edge_queue.task_done()
+#                 # print("Queue task done signal sent. Queue will join. Thread may still be running.")
+#                 return
+
+
 
 def gpu_thread_worker(nn, edge_queue, eval_batch_size, is_cuda):
     while True:
@@ -289,17 +352,21 @@ def gpu_thread_worker(nn, edge_queue, eval_batch_size, is_cuda):
             edges = []
             last_batch = False
             for i in range(eval_batch_size):
+                if edge_queue.empty():
+                    break
                 try:
                     edge = edge_queue.get_nowait()
                     if edge is None:
                         last_batch = True
-                        print("Sentinel received. GPU will process this batch and terminate afterwards")
+                        # print("Sentinel received. GPU will process this batch and terminate afterwards")
                     else:
                         edges.append(edge)
                 except queue.Empty:
                     pass
 
             if len(edges) != 0:
+                # print("batch size:", len(edges))
+
                 # batch process
                 states = [edge.to_node.checker_state for edge in edges]
                 input_tensor = states_to_batch_tensor(states, is_cuda)
@@ -310,39 +377,35 @@ def gpu_thread_worker(nn, edge_queue, eval_batch_size, is_cuda):
                 else:
                     value_tensor = nn(input_tensor)
 
-                # value
-                value_array = value_tensor.cpu().numpy()
-                value_array = np.squeeze(value_array, axis=1)
-                value_list = value_array.tolist()
                 if isinstance(nn, YesPolicy):
-                    # logits
-                    logit_array = logits_tensor.cpu().numpy()
-                    logit_array = np.squeeze(logit_array, axis=1)
-                    logit_list = logit_array.tolist()
-                else:
-                    logit_list = value_list
+                    logits_tensor=value_tensor
+
+                # value
+                # value_array = value_tensor.cpu().numpy()
+                # value_array = np.squeeze(value_array, axis=1)
+                # value_list = value_array.tolist()
+                # if isinstance(nn, YesPolicy):
+                #     # logits
+                #     logit_array = logits_tensor.cpu().numpy()
+                #     logit_array = np.squeeze(logit_array, axis=1)
+                #     logit_list = logit_array.tolist()
+                # else:
+                #     logit_list = value_list
 
                 for edx, edge in enumerate(edges):
-                    edge.value = value_list[edx]
-                    edge.logit = logit_list[edx]
+                    edge.value = value_tensor[edx,0]
+                    edge.logit = logits_tensor[edx,0]
                     edge_queue.task_done()
                     edge.from_node.unassigned -= 1
                     if edge.from_node.unassigned == 0:
-                        # probability
-                        prob_tensor=nn.logits_to_probability(torch.Tensor([c.logit for c in edge.from_node.edges]))
-                        prob_array = prob_tensor.numpy()
-                        prob_list = prob_array.tolist()
-                        for ic, c in enumerate(edge.from_node.edges):
-                            c.prior_probability=prob_list[ic]
                         edge.from_node.lock.release()
             else:
                 time.sleep(0.1)
 
             if last_batch:
                 edge_queue.task_done()
-                print("Queue task done signal sent. Queue will join. Thread may still be running.")
+                # print("Queue task done signal sent. Queue will join. Thread may still be running.")
                 return
-
 
 if __name__ == '__main__':
     az = AlphaZero("first", is_cuda=True)
