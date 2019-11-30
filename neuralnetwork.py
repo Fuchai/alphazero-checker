@@ -53,6 +53,7 @@ class NoPolicy(nn.Module):
             nn.BatchNorm2d(1),
             nn.ReLU(),
         )
+        self.weights_init()
 
     def forward(self, input_tensor):
         """
@@ -108,12 +109,22 @@ class NoPolicy(nn.Module):
         policy = policy.squeeze(1)
         return policy
 
+    def weights_init(self):
+        def init_weights(m):
+            if isinstance(m, nn.Conv2d):
+                torch.nn.init.xavier_uniform_(m.weight.data)
+                m.bias.data.fill_(0.01)
+            if type(m) == nn.Linear:
+                torch.nn.init.xavier_uniform_(m.weight)
+                m.bias.data.fill_(0.01)
+        self.apply(init_weights)
+
 
 class PaperLoss(nn.Module):
     def __init__(self):
         super(PaperLoss, self).__init__()
         self.l1 = torch.nn.L1Loss()
-        self.lsm = nn.LogSoftmax()
+        self.lsm = nn.LogSoftmax(dim=0)
 
     def forward(self, v, z, logit_p, pi):
         """
@@ -124,7 +135,8 @@ class PaperLoss(nn.Module):
         :param pi: the mcts target pi
         :return:
         """
-        ret=self.l1(v, z) - torch.sum(pi * self.lsm(logit_p))
+        lsm=self.lsm(logit_p)
+        ret=self.l1(v, z) - torch.sum(pi * lsm)
         return ret
 
 

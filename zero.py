@@ -40,7 +40,7 @@ class AlphaZero:
         self.optim = torch.optim.Adam(self.nn.parameters(), weight_decay=0.01)
         # control how many time steps each loss.backwards() is called for.
         # controls the GPU memory allocation
-        self.training_time_step_batch_size = 2 #16
+        self.training_time_step_batch_size = 2  # 16
         # controls how many boards is fed into a neural network at once
         # controls the speed of gpu computation.
         self.neural_network_batch_size = 128
@@ -53,10 +53,11 @@ class AlphaZero:
         self.print_period = 10
         self.save_period = 1000
         self.log_file = "log/" + self.model_name + "_" + datetime_filename() + ".txt"
+        self.log_file = Path(self.log_file)
         self.refresh_period = 10
 
         # Pass to MCTS and other methods
-        self.max_game_length=5
+        self.max_game_length = 5
         self.simulations_per_play = 200
         # this is a tuned parameter, do not change
         self.eval_batch_size = 25600 // self.simulations_per_play
@@ -73,7 +74,8 @@ class AlphaZero:
                 gpu_thread = threading.Thread(target=gpu_thread_worker,
                                               args=(self.nn, nn_thread_edge_queue, self.eval_batch_size, self.is_cuda))
                 gpu_thread.start()
-                mcts = MCTS(nn_thread_edge_queue, self.is_cuda, self.max_game_length, self.simulations_per_play, self.debug)
+                mcts = MCTS(nn_thread_edge_queue, self.is_cuda, self.max_game_length, self.simulations_per_play,
+                            self.debug)
                 mcts.play_until_terminal()
                 nn_thread_edge_queue.put(None)
                 print("Terminal sentinel is put on queue")
@@ -98,27 +100,23 @@ class AlphaZero:
                         "train epoch %4d, batch %4d. running loss: %.5f" %
                         (epoch, ti, train_loss))
                 if ti % self.validation_period == 0:
-                    self.validation()
+                    valid_loss = self.validate_one_round()
+                    self.log_print(
+                        "%14s " % self.model_name +
+                        "validation epoch %4d, batch %4d. validation loss: %.5f" %
+                        (epoch, ti, valid_loss))
 
-    def run_one_round(self):
-        pass
-
-    def train_one_round(self):
-        self.nn.train()
-        # sample self.batch_size number of time steps, bundle them together
-        sampled_tss = random.sample(self.time_steps, k=self.training_time_step_batch_size)
-
+    def run_one_round(self, sampled_tss):
         # compile value tensor
-        value_batches = len(sampled_tss) // self.neural_network_batch_size +1
+        value_batches = len(sampled_tss) // self.neural_network_batch_size + 1
         for batch_idx in range(value_batches):
             batch_tss = sampled_tss[
-                batch_idx * self.neural_network_batch_size: (batch_idx + 1) * self.neural_network_batch_size]
+                        batch_idx * self.neural_network_batch_size: (batch_idx + 1) * self.neural_network_batch_size]
             value_inputs = [ts.checker_state for ts in batch_tss]
             value_tensor = states_to_batch_tensor(value_inputs, is_cuda=self.is_cuda)
             value_output = self.nn(value_tensor)
             for tsidx, ts in enumerate(batch_tss):
-                # TODO check indices
-                ts.v=value_output[tsidx]
+                ts.v = value_output[tsidx]
 
         # compile policy tensor
         # queue up children_states
@@ -144,22 +142,20 @@ class AlphaZero:
 
         # policy transpose
         for ts in sampled_tss:
-            # TODO check indices
-            ts.logits=torch.cat(ts.logits)
+            ts.logits = torch.cat(ts.logits)
 
         # loss calculation
-        loss=0
+        loss = 0
         for ts in sampled_tss:
             # should we reinitialize every time or store them?
-            z=torch.Tensor([ts.z])
-            pi=torch.Tensor(ts.pi)
+            z = torch.Tensor([ts.z])
+            pi = torch.Tensor(ts.pi)
             if self.is_cuda:
-                z=z.cuda()
-                pi=pi.cuda()
+                z = z.cuda()
+                pi = pi.cuda()
             loss += self.loss_fn(ts.v, z, ts.logits, pi)
-        loss.backward()
-        self.optim.step()
-        return loss.item()
+        loss=loss/ self.neural_network_batch_size
+        return loss
 
     def policy_bonanza(self, policy_inputs_queue, dim_ts):
         policy_tensor = states_to_batch_tensor(policy_inputs_queue, self.is_cuda)
@@ -179,22 +175,25 @@ class AlphaZero:
         # take care of the last ones
         # tss_policy_output[ts].append(policy_output[tsbegin: ts, :, :])
         # including tsidx
-        assert(tsidx+1==len(dim_ts))
-        ts.logits.append(policy_output[tsbegin: tsidx+1, :])
+        assert (tsidx + 1 == len(dim_ts))
+        ts.logits.append(policy_output[tsbegin: tsidx + 1, :])
 
-    def validation(self):
+    def train_one_round(self):
+        self.nn.train()
+        # sample self.batch_size number of time steps, bundle them together
+        sampled_tss = random.sample(self.time_steps, k=self.training_time_step_batch_size)
+        loss = self.run_one_round(sampled_tss)
+        loss.backward()
+        self.optim.step()
+        return loss.item()
+
+    def validate_one_round(self):
         with torch.no_grad():
             self.nn.eval()
-            validation_time_steps = []
-            for i in range(self.game_size):
-                mcts = MCTS(self.nn)
-                mcts.play_until_terminal()
-                validation_time_steps += mcts.time_steps
-            self.batch_tss = random.choices(validation_time_steps, k=self.training_time_step_batch_size)
-            input, target = self.time_steps_to_tensor(self.batch_tss)
-            output = self.nn(input)
-            loss = self.loss_fn(output, target)
-            return loss.data
+            # sample self.batch_size number of time steps, bundle them together
+            sampled_tss = random.sample(self.time_steps, k=self.training_time_step_batch_size)
+            loss = self.run_one_round(sampled_tss)
+        return loss.item()
 
     def time_steps_to_tensor(self, batch_tss):
         # what is the strategy for training time neural network call?
@@ -213,7 +212,7 @@ class AlphaZero:
     def log_print(self, message):
         string = str(message)
         if self.log_file is not None and self.log_file != False:
-            with open(self.log_file, 'a') as handle:
+            with self.log_file.open("a") as handle:
                 handle.write(string + '\n')
         print(string)
 
@@ -274,10 +273,8 @@ class AlphaZero:
         return computer, optim, highest_epoch, highest_iter
 
 
-
-
 def datetime_filename():
-    return datetime.datetime.now().strftime("%m_%d_%X")
+    return datetime.datetime.now().strftime("%m-%d-%H-%M-%S")
 
 
 def gpu_thread_worker(nn, edge_queue, eval_batch_size, is_cuda):
