@@ -53,6 +53,7 @@ class MCTS:
             if self.debug:
                 t1 = time.time()
                 print("Time per play: " + str(t1 - t0))
+                self.permaTree.root.checker_state.print_board()
             terminal = self.play()
             if terminal:
                 print("Terminated at step", step)

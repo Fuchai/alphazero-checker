@@ -22,10 +22,10 @@ class ResBlock(nn.Module):
         out6 = torch.relu(out5)
         return out6
 
+
 class Model(nn.Module):
     def __init__(self):
         super(Model, self).__init__()
-
 
     def weights_init(self):
         def init_weights(m):
@@ -35,12 +35,12 @@ class Model(nn.Module):
             if type(m) == nn.Linear:
                 torch.nn.init.xavier_uniform_(m.weight)
                 m.bias.data.fill_(0.01)
+
         self.apply(init_weights)
 
     def logits_to_probability(self, children_logits):
         policy = torch.softmax(children_logits, dim=0)
         return policy
-
 
 
 class NoPolicy(Model):
@@ -49,9 +49,9 @@ class NoPolicy(Model):
     """
 
     def __init__(self):
+        super(NoPolicy, self).__init__()
         scale = 64
         tower_len = 9
-        super(NoPolicy, self).__init__()
         self.conv1 = nn.Conv2d(4, scale, 3, padding=1)
         self.bn1 = nn.BatchNorm2d(scale)
         self.tower = nn.ModuleList([ResBlock(scale)] * tower_len)
@@ -108,15 +108,6 @@ class NoPolicy(Model):
         v2 = torch.tanh(v2)
         return v2
 
-    def policy_logit(self, input_tensor):
-        """
-        the policy logit here is just the values
-        :param input_tensor:
-        :return:
-        """
-        return self(input_tensor)
-
-
     def children_values_to_probability(self, children_value_tensor):
         """
 
@@ -124,6 +115,7 @@ class NoPolicy(Model):
         :return:
         """
         return self.logits_to_probability(children_value_tensor)
+
 
 class YesPolicy(Model):
     def __init__(self):
@@ -170,7 +162,7 @@ class YesPolicy(Model):
             out3 = res(out2)
 
         p = self.policy_head(out3)
-        p2 = p.reshape(p.shape[0],-1)
+        p2 = p.reshape(p.shape[0], -1)
         p2 = self.policy_linear_1(p2)
         p2 = torch.relu(p2)
         p2 = self.policy_linear_2(p2)
@@ -182,16 +174,7 @@ class YesPolicy(Model):
         v2 = torch.relu(v2)
         v2 = self.value_linear_2(v2)
         v2 = torch.tanh(v2)
-        return p2,v2
-
-    def policy_logit(self, input_tensor):
-        """
-        the policy logit here is just the values
-        :param input_tensor:
-        :return:
-        """
-        return self(input_tensor, True)
-
+        return p2, v2
 
 
 class PaperLoss(nn.Module):
@@ -209,9 +192,10 @@ class PaperLoss(nn.Module):
         :param pi: the mcts target pi
         :return:
         """
-        lsm=self.lsm(logit_p)
-        ret=self.l1(v, z) - torch.sum(pi * lsm)
-        return ret
+        lsm = self.lsm(logit_p)
+        ret1 = self.l1(v, z)
+        ret2 = - torch.sum(pi * lsm)
+        return ret1, ret2
 
 
 def states_to_batch_tensor(states, is_cuda):

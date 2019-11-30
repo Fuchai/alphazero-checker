@@ -46,7 +46,7 @@ class AlphaZero:
         self.neural_network_batch_size = 128
         # time steps contain up to self.game_size different games.
         self.time_steps = []
-        self.game_size = 8
+        self.game_size = 4
         self.total_game_refresh = 20
         self.reuse_game_interval = 2000
         self.validation_period = 100
@@ -56,13 +56,19 @@ class AlphaZero:
         self.log_file = Path(self.log_file)
         self.refresh_period = 10
 
+        self.starting_epoch=0
+        self.starting_iteration=0
+        self.load_model()
+
         # Pass to MCTS and other methods
         self.max_game_length = 200
         self.simulations_per_play = 200
         # this is a tuned parameter, do not change
-        self.eval_batch_size = 25600 // self.simulations_per_play
+        self.eval_batch_size = 204800 // self.simulations_per_play
         self.debug = True
-        self.max_queue_size = self.eval_batch_size//2
+        self.max_queue_size = self.eval_batch_size*2
+
+        # self.fast_settings()
 
     def fast_settings(self):
         self.max_game_length=4
@@ -96,21 +102,23 @@ class AlphaZero:
                 print("Queue empty:", nn_thread_edge_queue.empty())
 
     def train(self):
-        for epoch in range(self.total_game_refresh):
+        for epoch in range(self.starting_epoch, self.total_game_refresh):
             self.mcts_refresh_game()
-            for ti in range(self.reuse_game_interval):
-                train_loss = self.train_one_round()
+            for ti in range(self.starting_iteration, self.reuse_game_interval):
+                train_vloss, train_ploss = self.train_one_round()
                 if ti % self.print_period == 0:
                     self.log_print(
                         "%14s " % self.model_name +
-                        "train epoch %4d, batch %4d. running loss: %.5f" %
-                        (epoch, ti, train_loss))
+                        "train epoch %4d, batch %4d. running value loss: %.5f. running policy loss: %.5f" %
+                        (epoch, ti, train_vloss, train_ploss))
                 if ti % self.validation_period == 0:
-                    valid_loss = self.validate_one_round()
+                    valid_vloss, valid_ploss = self.validate_one_round()
                     self.log_print(
                         "%14s " % self.model_name +
-                        "validation epoch %4d, batch %4d. validation loss: %.5f" %
-                        (epoch, ti, valid_loss))
+                        "valid epoch %4d, batch %4d. validation value loss: %.5f. validation policy loss: %.5f" %
+                        (epoch, ti, valid_vloss, valid_ploss))
+                if ti % self.save_period == 0:
+                    self.save_model(epoch, ti)
 
     def run_one_round(self, sampled_tss):
         # compile value tensor
@@ -120,7 +128,7 @@ class AlphaZero:
                         batch_idx * self.neural_network_batch_size: (batch_idx + 1) * self.neural_network_batch_size]
             value_inputs = [ts.checker_state for ts in batch_tss]
             value_tensor = states_to_batch_tensor(value_inputs, is_cuda=self.is_cuda)
-            value_output = self.nn(value_tensor)
+            _, value_output = self.nn(value_tensor)
             for tsidx, ts in enumerate(batch_tss):
                 ts.v = value_output[tsidx]
 
@@ -151,7 +159,7 @@ class AlphaZero:
             ts.logits = torch.cat(ts.logits)
 
         # loss calculation
-        loss = 0
+        vloss, ploss = 0, 0
         for ts in sampled_tss:
             # should we reinitialize every time or store them?
             z = torch.Tensor([ts.z])
@@ -159,13 +167,17 @@ class AlphaZero:
             if self.is_cuda:
                 z = z.cuda()
                 pi = pi.cuda()
-            loss += self.loss_fn(ts.v, z, ts.logits, pi)
-        loss=loss/ self.neural_network_batch_size
-        return loss
+
+            ret= self.loss_fn(ts.v, z, ts.logits, pi)
+            vloss+=ret[0]
+            ploss+=ret[1]
+        vloss=vloss/ self.neural_network_batch_size
+        ploss=ploss/self.neural_network_batch_size
+        return vloss, ploss
 
     def policy_bonanza(self, policy_inputs_queue, dim_ts):
         policy_tensor = states_to_batch_tensor(policy_inputs_queue, self.is_cuda)
-        policy_output = self.nn.policy_logit(policy_tensor)
+        policy_output, _ = self.nn(policy_tensor)
         # slice and append
         last_ts = None
         tsbegin = None
@@ -188,18 +200,20 @@ class AlphaZero:
         self.nn.train()
         # sample self.batch_size number of time steps, bundle them together
         sampled_tss = random.sample(self.time_steps, k=self.training_time_step_batch_size)
-        loss = self.run_one_round(sampled_tss)
+        vloss, ploss = self.run_one_round(sampled_tss)
+        loss=vloss+ploss
         loss.backward()
         self.optim.step()
-        return loss.item()
+        return vloss.item(), ploss.item()
 
     def validate_one_round(self):
         with torch.no_grad():
             self.nn.eval()
             # sample self.batch_size number of time steps, bundle them together
             sampled_tss = random.sample(self.time_steps, k=self.training_time_step_batch_size)
-            loss = self.run_one_round(sampled_tss)
-        return loss.item()
+            vloss, ploss = self.run_one_round(sampled_tss)
+            loss = vloss + ploss
+        return vloss.item(), ploss.item()
 
     def time_steps_to_tensor(self, batch_tss):
         # what is the strategy for training time neural network call?
@@ -232,11 +246,17 @@ class AlphaZero:
         pickle_file = Path(task_dir).joinpath(
             "saves/" + self.model_name + "_" + str(epoch) + "_" + str(iteration) + ".pkl")
         with pickle_file.open('wb') as fhand:
-            torch.save((self.nn, self.optim, epoch, iteration), fhand)
+            torch.save((self.nn.state_dict(), self.optim, epoch, iteration), fhand)
 
         print("saved model", self.model_name, "at", pickle_file)
 
-    def load_model(self, computer, optim, starting_epoch, starting_iteration, model_name):
+    def load_model(self):
+        """
+        if starting epoch and iteration are zero, it loads the newest model
+        :return:
+        """
+        starting_epoch=self.starting_epoch
+        starting_iteration=self.starting_iteration
         task_dir = os.path.dirname(abspath(__file__))
         save_dir = Path(task_dir) / "saves"
         highest_epoch = 0
@@ -246,7 +266,7 @@ class AlphaZero:
             os.mkdir(save_dir)
 
         for child in save_dir.iterdir():
-            if child.name.split("_")[0] == model_name:
+            if child.name.split("_")[0] == self.model_name:
                 epoch = child.name.split("_")[1]
                 iteration = child.name.split("_")[2].split('.')[0]
                 iteration = int(iteration)
@@ -259,24 +279,27 @@ class AlphaZero:
 
         if highest_epoch == 0 and highest_iter == 0:
             print("nothing to load")
-            return computer, optim, starting_epoch, starting_iteration
+            return
 
         if starting_epoch == 0 and starting_iteration == 0:
             pickle_file = Path(task_dir).joinpath(
-                "saves/" + model_name + "_" + str(highest_epoch) + "_" + str(highest_iter) + ".pkl")
+                "saves/" + self.model_name + "_" + str(highest_epoch) + "_" + str(highest_iter) + ".pkl")
             print("loading model at", pickle_file)
             with pickle_file.open('rb') as pickle_file:
                 computer, optim, epoch, iteration = torch.load(pickle_file)
             print('Loaded model at epoch ', highest_epoch, 'iteration', highest_iter)
         else:
             pickle_file = Path(task_dir).joinpath(
-                "saves/" + model_name + "_" + str(starting_epoch) + "_" + str(starting_iteration) + ".pkl")
+                "saves/" + self.model_name + "_" + str(starting_epoch) + "_" + str(starting_iteration) + ".pkl")
             print("loading model at", pickle_file)
             with pickle_file.open('rb') as pickle_file:
                 computer, optim, epoch, iteration = torch.load(pickle_file)
             print('Loaded model at epoch ', starting_epoch, 'iteration', starting_iteration)
 
-        return computer, optim, highest_epoch, highest_iter
+        self.nn.load_state_dict(computer)
+        self.optim=optim
+        self.starting_epoch=highest_epoch
+        self.starting_iter=highest_iter
 
 
 def datetime_filename():
@@ -408,5 +431,5 @@ def gpu_thread_worker(nn, edge_queue, eval_batch_size, is_cuda):
                 return
 
 if __name__ == '__main__':
-    az = AlphaZero("first", is_cuda=True)
+    az = AlphaZero("alpha", is_cuda=True)
     az.train()
