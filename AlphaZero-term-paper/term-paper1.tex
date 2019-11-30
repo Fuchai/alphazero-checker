@@ -1,0 +1,155 @@
+%File: formatting-instruction.tex
+\documentclass[letterpaper]{article}
+\usepackage{aaai}
+\usepackage{times}
+\usepackage{helvet}
+\usepackage{courier}
+\frenchspacing
+\setlength{\pdfpagewidth}{8.5in}
+\setlength{\pdfpageheight}{11in}
+\pdfinfo{
+/Title (AlphaZero for Checkers)
+/Author (Jason Hu, Saveri Pal, YunQi Bang)}
+\setcounter{secnumdepth}{0}  
+ \begin{document}
+% The file aaai.sty is the style file for AAAI Press 
+% proceedings, working notes, and technical reports.
+%
+\title{AlphaZero for Checkers}
+\author{Jason Hu, Saveri Pal, YunQi Bang\\
+Iowa State University, Department of Computer Science\\
+Atanasoff Hall, 2434 Osborn Drive\\
+Ames, Iowa, 50011\\
+}
+\maketitle
+\begin{abstract}
+\begin{quote}
+Checkers is a popular game for Artificial Intelligence. In this project Monte Carlo Tree Search (MCTS) has been used to estimate minimax in a play of Checkers. The MCTS sample space is explored using the AlpaZero heuristics. Starting with a random selection pattern, the neural network helps improve the tree search to select stronger moves eventually.
+\end{quote}
+\end{abstract}
+
+\section{Introduction}
+AlphaGo is a famous algorithm that for the first time defeated a human Go champion. The Monte Carlo Tree Search in AlphaGo evaluates all possible positions from a state and selects a move using two deep neural networks. The algorithm trained the neural networks by supervised learning and reinforced learning. \\
+AlphaZero is an upgraded algorithm that is simpler and faster. It has only one deep learning evaluation function rather than two, as in AlphaGo. Training AlphaZero does not require a collection of example games and human expert moves. It uses reinforcement learning from self-play. AlphaZero has a special MCTS choice function that is improved by the neural network.
+In this project, an AlphaZero agent is implemented that learns to play checkers. 
+
+
+\section{Method}
+The AlphaZero algorithm is constructed by combining search tree, search algorithm and a neural network. The search tree part involved constructing an adequate search tree that stores all possible actions from a particular state. For the search algorithm, the MCTS algorithm is implemented on the search tree. The MCTS takes help from the neural network to strengthen the actions selected from a state.
+
+\subsection{Search tree.} A node \textit{s} in the search tree denotes the state of checker board  at any time. An outbound edge from a node \textit{(s,a)} denotes a move or an action. Each node contains a set of information,\\
+\begin{center}
+    \textit{{N(s,a), W(s,a),Q(s,a),P(s,a)}}
+\end{center}
+Here \textit{(N(s,a)} is the visit count denoting the number of times a node has been visited.\\
+...needs to be completed...
+\subsection{Search algorithm.} The Monte Carlo Tree Search algorithm can be divided into four major steps namely, selection, expand and evaluation, backup and play.
+\subsubsection{Select.} Each simulation of MCTS starts at the root node \textit{$s_0$}. Moves are selected based on the following equations,
+\begin{center}
+        $a_t = argmax(Q(s_0,a)+u(s_0,a))$
+        \newline
+        \newline
+        where $u(s_0,a) = c_{puct}.P(s_0,a).\frac{\sqrt{\sum_{b}N(s_0,b)}}{1+N(s_0,b)}$
+        \newline
+        \newline
+        $(P(s_0,a),v) = f_{\theta}(s)$
+\end{center}
+$c_{puct}$ is a constant determining the level of exploration. For this project, 0.1 is the value of this variable.The value of $(P(s_0,a),v)$ is obtained from the neural network.
+\subsubsection{Expand and evaluate.} When a path (edge) is selected, a leaf node is added to the search tree. The leaf node is expanded with outbound edges and each edge is initialized to,
+\begin{itemize}
+    \item $N(s_L,a)=0$
+    \item $W(s_L,a)=0$
+    \item $Q(s_L,a)=0$
+    \item $P(s_L,a)=p_a$
+\end{itemize}
+The value of $p_a$ is obtained from the neural network.
+\subsubsection{Backup.} Once $p,v$ are calculated for the leaf node $s_L$, the whole path is traced back till the root. Every node and edge in this path is updated for visit count, action value and mean value. For an edge $(s,a)$,
+\begin{itemize}
+    \item $(p,v) = f_{\theta}$
+    \item $N(s,a) = N(s,a) + 1$
+    \item $W(s,a) = W(s,a) + v$
+    \item $Q(s,a) = \frac{W(s,a)}{N(s,a)}$
+\end{itemize}
+The selection, expansion and backup step is repeated multiple times. The number of repetitions is pre-decided. Once the simulation completes, the game makes an actual move.
+\subsubsection{Play.} To decide on an actual move from all possible options, the algorithm samples a move \textit{a} based on,
+\begin{center}
+    $\Pi(a|s) = \frac{N(s,a)^{\frac{1}{\tau}}}{\sum_{b} N(s,b)^{\frac{1}{\tau}}}$
+\end{center}
+$\tau$ is a temperature parameter that controls the level of exploration. The selected move \textit{a} becomes the root of the search. The children of this root is preserved, while the other parts of the search tree is discarded. Then MCTS simulation is repeated for the next move from the current root. 
+
+\subsection{Neural Network.}
+
+\section{Experiment} Experiment information goes here...
+
+
+\section{Discussion} Discussion goes here...
+
+
+\section{Citations}
+Citations within the text should include the author's last name and year, for example (Newell 1980). Append lower-case letters to the year in cases of ambiguity. Multiple authors should be treated as follows: (Feigenbaum and Engelmore 1988) or (Ford, Hayes, and Glymour 1992). In the case of four or more authors, list only the first author, followed by et al. (Ford et al. 1997).
+
+\subsection{Illustrations and Figures}
+Figures, drawings, tables, and photographs should be placed throughout the paper near the place where they are first discussed. Do not group them together at the end of the paper. If placed at the top or bottom of the paper, illustrations may run across both columns. Figures must not invade the top, bottom, or side margin areas. Figures must be inserted using the \textbackslash usepackage\{graphicx\}. Number figures sequentially, for example, figure 1, and so on. 
+
+The illustration number and caption should appear under the illustration. Labels, and other text in illustrations must be at least nine-point type. 
+
+\section{ Acknowledgments}
+AAAI is especially grateful to Peter Patel Schneider for his work in implementing the aaai.sty file, liberally using the ideas of other style hackers, including Barbara Beeton. We also acknowledge with thanks the work of George Ferguson for his guide to using the style and BibTeX files --- which has been incorporated into this document  --- and Hans Guesgen, who provided several timely modifications, as well as the many others who have, from time to time, sent in suggestions on improvements to the AAAI style. 
+
+\subsubsection{Appendices.}
+Any appendices follow the acknowledgments, if included, or after the main body of text if no acknowledgments appear. 
+
+\subsection{References} 
+The aaai.sty file includes a set of definitions for use in formatting references with BibTeX. These definitions make the bibliography style fairly close to the one specified below. To use these definitions, you also need the BibTeX style file ``aaai.bst," available in the author kit on the AAAI web site. Then, at the end of your paper but before \textbackslash end{document}, you need to put the following lines:
+
+\begin{quote}
+\begin{small}
+\textbackslash bibliographystyle\{aaai\}
+\textbackslash bibliography\{bibfile1,bibfile2,...\}
+\end{small}
+\end{quote}
+
+The list of files in the \textbackslash  bibliography command should be the names of your BibTeX source files (that is, the .bib files referenced in your paper).
+
+The following commands are available for your use in citing references:
+\begin{quote}
+\begin{small}
+\textbackslash cite: Cites the given reference(s) with a full citation. This appears as ``(Author Year)'' for one reference, or ``(Author Year; Author Year)'' for multiple references.\\
+\textbackslash shortcite: Cites the given reference(s) with just the year. This appears as ``(Year)'' for one reference, or ``(Year; Year)'' for multiple references.\\
+\textbackslash citeauthor: Cites the given reference(s) with just the author name(s) and no parentheses.\\
+\textbackslash citeyear: Cites the given reference(s) with just the date(s) and no parentheses.
+\end{small}
+\end{quote}
+
+\textbf{Warning:} The aaai.sty file is incompatible with the hyperref and natbib packages. If you use either, your references will be garbled.
+
+Formatted bibliographies should look like the following examples.
+
+\smallskip \noindent \textit{Book with Multiple Authors}\\
+Engelmore, R., and Morgan, A. eds. 1986. \textit{Blackboard Systems.} Reading, Mass.: Addison-Wesley.
+
+\smallskip \noindent \textit{Journal Article}\\
+Robinson, A. L. 1980a. New Ways to Make Microcircuits Smaller. \textit{Science} 208: 1019--1026.
+
+\smallskip \noindent \textit{Magazine Article}\\
+Hasling, D. W.; Clancey, W. J.; and Rennels, G. R. 1983. Strategic Explanations in Consultation. \textit{The International Journal of Man-Machine Studies} 20(1): 3--19.
+
+\smallskip \noindent \textit{Proceedings Paper Published by a Society}\\
+Clancey, W. J. 1983b. Communication, Simulation, and Intelligent Agents: Implications of Personal Intelligent Machines for Medical Education. In Proceedings of the Eighth International Joint Conference on Artificial Intelligence, 556--560. Menlo Park, Calif.: International Joint Conferences on Artificial Intelligence, Inc.
+
+\smallskip \noindent \textit{Proceedings Paper Published by a Press or Publisher}\\
+Clancey, W. J. 1984. Classification Problem Solving. In \textit{Proceedings of the Fourth National Conference on Artificial Intelligence,} 49--54. Menlo Park, Calif.: AAAI Press. 
+
+\smallskip \noindent \textit{University Technical Report}\\
+Rice, J. 1986. Poligon: A System for Parallel Problem Solving, Technical Report, KSL-86-19, Dept. of Computer Science, Stanford Univ. 
+
+\smallskip \noindent \textit{Dissertation or Thesis}\\
+Clancey, W. J. 1979b. Transfer of Rule-Based Expertise through a Tutorial Dialogue. Ph.D. diss., Dept. of Computer Science, Stanford Univ., Stanford, Calif.
+
+\smallskip \noindent \textit{Forthcoming Publication}\\
+Clancey, W. J. 1986a. The Engineering of Qualitative Models. Forthcoming.
+
+\bigskip
+\noindent Thank you for reading these instructions carefully. We look forward to receiving your electronic files!
+
+\end{document}
