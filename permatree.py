@@ -1,13 +1,22 @@
 from neuralnetwork import *
+from threading import Lock
+
 # the permanent tree data structure
 class PermaTree:
     def __init__(self, checker, is_cuda):
-        self.is_cuda=is_cuda
-        self.root=PermaNode(self,checker.state)
+        self.is_cuda = is_cuda
+        self.node_count = 0
+        self.root = PermaNode(self, checker.state)
+        self.last_capture = 0
 
     def move_root(self, node):
         # move from root to a immediate child
         # update parent to None
+        if not node.is_root():
+            if node.from_edge.is_capture:
+                self.last_capture = 0
+            else:
+                self.last_capture += 1
         self.root = node
         self.root.parent = None
 
@@ -30,25 +39,29 @@ class PermaEdge:
         # a Node object for where the action comes from
         self.from_node = from_node
         # initialize node whenever an edge is created, guarantees the data structure property
-        self.to_node = PermaNode(perma_tree, action, self.from_node, self)
+        self.to_node = PermaNode(perma_tree, action.get_flipped_state(), self.from_node, self)
+        self.is_capture = action.is_capture
         # self.to_node = None  # create new child node in expand() and update this
 
         # # these values are initialized at expand() and updated in backup()
-        self.prior_probability = None
         self.visit_count = 0
         self.total_action_value = 0
         self.mean_action_value = 0
+        # from neural network queue
         self.value = None
-        # side effect, initialize the node that the edge points to
+        self.logit = None
+        # computed after the from_node is ready
+        self.prior_probability = None
 
     def checker_to_tensor(self):
         return binary_board(self.to_node.checker_state.board)
 
     def assign_value(self, nn):
-        tensors=states_to_batch_tensor([self.to_node.checker_state], self.perma_tree.is_cuda)
-        value=nn(tensors)
-        self.value=value.cpu().numpy().tolist()[0][0]
+        tensors = states_to_batch_tensor([self.to_node.checker_state], self.perma_tree.is_cuda)
+        value = nn(tensors)
+        self.value = value.cpu().numpy().tolist()[0][0]
         return value
+
 
 class PermaNode:
     """
@@ -63,6 +76,11 @@ class PermaNode:
         self.from_edge = from_edge
         # adjacency list implementation
         self.edges = []
+        # locked if the children prior probability is being calculated by the neural network or selection is in progress
+        self.lock = Lock()
+        self.unassigned=0
+        self.probability_ready=False
+        perma_tree.node_count += 1
 
     def is_leaf(self):
         return len(self.edges) == 0
@@ -77,7 +95,7 @@ class PermaNode:
         """
         # call get_legal_actions from checker
         actions, _ = self.checker_state.get_legal_actions()
-        if len(actions)==0:
+        if len(actions) == 0:
             return True
         # init and add edges into node
         for action in actions:
@@ -86,16 +104,38 @@ class PermaNode:
         return False
 
     def get_children_checker_states(self):
-        return (edge.to_node.checker_state for edge in self.edges)
+        return [edge.to_node.checker_state for edge in self.edges]
 
-    def assign_children_values(self, nn):
-        values=[]
+    def put_children_on_nn_queue(self, nn_queue):
+        """
+        self is a leaf node that is being expanded
+        This function will asynchronously assign the child edge value and prior probability
+        A worker thread with neural network is constantly scanning the nn_queue to assign edges in batch
+        :param parallel_nn_queue:
+        :return:
+        """
+        self.lock.acquire()
         for edge in self.edges:
-            val= edge.assign_value(nn)
-            values.append(val)
-        if len(values)==0:
-            print("STOP HERE")
-        ret= torch.cat(values)
+            self.unassigned+=1
+            nn_queue.put(edge)
 
-        # initialize the prior probability of all children
-        return ret
+        #
+        # # this lock will be released when all of its children are evaluated
+        # states = [edge.to_node.checker_state for edge in self.edges]
+        # input_tensor = states_to_batch_tensor(states, self.perma_tree.is_cuda)
+        # value_tensor = nn(input_tensor)
+        # value_array = value_tensor.cpu().numpy()
+        # value_array = np.squeeze(value_array, axis=1)
+        # value_list = value_array.tolist()
+        # for edx, edge in enumerate(self.edges):
+        #     edge.value = value_list[edx]
+        #
+        # # initialize the prior probability of all children
+        # p = nn.children_values_to_probability(value_tensor)
+        # # assert that all edges must not be shuffled
+        # # this should only be used for MCTS, not training. no gradient is here.
+        # npp = p.cpu().numpy().tolist()
+        # for edx, edge in enumerate(self.edges):
+        #     edge.prior_probability = npp[edx]
+
+

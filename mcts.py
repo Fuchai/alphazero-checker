@@ -1,8 +1,12 @@
+import time
 from checker import Checker
 import numpy as np
 import math
 from permatree import PermaTree
 import random
+from queue import Empty
+from neuralnetwork import states_to_batch_tensor
+import torch
 
 # tree search does not check same node
 # algorithm
@@ -13,18 +17,20 @@ class MCTS:
     page 2 right column paragraph 1).
     """
 
-    def __init__(self, nn, is_cuda):
-        self.checker=Checker()
+    def __init__(self, nn_execution_queue, nn, is_cuda, max_game_length, simulations_per_play, debug):
+        self.checker = Checker()
         self.permaTree = PermaTree(self.checker, is_cuda)
-        self.nn = nn
+        self.nn_queue = nn_execution_queue
+        self.nn=nn
         # changes to False after the first 30 moves
         self.temperature = True
-        self.temperature_change_at=30
-        self.puct = 0.1
-        self.max_game_length=300
-        self.time_steps=[]
-        self.is_cuda=is_cuda
-
+        self.temperature_change_at = 30
+        self.puct = 10000
+        self.max_game_length = max_game_length
+        self.time_steps = []
+        self.is_cuda = is_cuda
+        self.simulations_per_play = simulations_per_play
+        self.debug=debug
 
     def play_until_terminal(self):
         """
@@ -34,28 +40,49 @@ class MCTS:
         :return:
         """
         for step in range(self.max_game_length):
-            if step % 10 ==0:
-                print("Game step "+ str(step) + " /"+ str(self.max_game_length))
-            simulations_per_play=200
-            if step==self.temperature_change_at:
-                self.temperature=False
-            for simulation in range(simulations_per_play):
+            # if step % 10 == 0:
+            print("Game step " + str(step) + " /" + str(self.max_game_length))
+            if step == self.temperature_change_at:
+                self.temperature = False
+            if self.debug:
+                t0 = time.time()
+            for simulation in range(self.simulations_per_play):
                 self.simulation()
-                if simulation % 40 == 0:
-                    print("Simulation " + str(simulation)+ " /"+ str(simulations_per_play))
-            self.play()
-            if self.is_terminal():
+                # if simulation % 40 == 0 and self.debug:
+                    # print("Simulation " + str(simulation) + " /" + str(self.simulations_per_play))
+            if self.debug:
+                t1 = time.time()
+                print("Time per play: " + str(t1 - t0))
+                self.permaTree.root.checker_state.print_board()
+            terminal = self.play()
+            if terminal:
+                print("Terminated at step", step)
                 break
 
-        print("Playing")
+        # there will be an outcome whether the game reaches terminal or not
+        final_state = self.permaTree.root.checker_state
+        outcome = final_state.evaluate()
+
+        # TODO not continuous outcome currently
+        if outcome == 0:
+            z = 0
+        else:
+            # truth table:
+            #      flipped  not flipped
+            # o>0    -1          1
+            # o<0     1         -1
+
+            a = final_state.flipped
+            b = outcome > 0
+            z = a ^ b
+            z = z * 2 - 1
 
         # assign z
-        # TODO
-        for dp in self.time_steps:
-            if dp.checker_state.is_flipped:
-                dp.z=1
+        for ts in self.time_steps:
+            if not ts.checker_state.flipped:
+                ts.z = z
             else:
-                dp.z=-1
+                ts.z = -z
 
     def play(self):
         """
@@ -63,8 +90,13 @@ class MCTS:
         add a data point without the final outcome z
         final outcome will be assigned at terminal
         :return:
+        0: normal, game continues
+        1: game terminates with no moves from root
+        2: draw due to excessive non-capturing
         """
         root = self.permaTree.root
+        if len(root.edges) == 0:
+            return 1
         scores = []
         for level_one_edge in root.edges:
             vc = level_one_edge.visit_count
@@ -73,21 +105,26 @@ class MCTS:
             sum_scores = sum(scores)
             pi = [score / sum_scores for score in scores]
             # samples instead
-            # TODO
-            sampled_action=random.choices(range(len(root.edges)), weights=pi, k=1)
-            sampled_action=root.edges[sampled_action[0]]
+
+            sampled_action = random.choices(range(len(root.edges)), weights=pi, k=1)
+            sampled_action = root.edges[sampled_action[0]]
             self.permaTree.move_root(sampled_action.to_node)
         else:
-            maxscore=- float("inf")
-            maxedx=None
+            maxscore = - float("inf")
+            maxedx = None
             for edx, score in enumerate(scores):
-                if score>maxscore:
-                    maxedx=edx
-            max_action=root.edges[maxedx]
+                if score > maxscore:
+                    maxedx = edx
+                    maxscore = score
+            pi = [0] * len(scores)
+            pi[maxedx] = 1
+            max_action = root.edges[maxedx]
             self.permaTree.move_root(max_action.to_node)
+        if self.permaTree.last_capture == 40:
+            print("Terminated due to peaceful activity")
+            return 2
 
-        self.time_steps.append(TimeStep(root.checker_state, root.get_children_checker_states, pi))
-
+        self.time_steps.append(TimeStep(root.checker_state, root.get_children_checker_states(), pi))
 
     def simulation(self):
         """
@@ -99,21 +136,17 @@ class MCTS:
         while not current_node.is_leaf():
             selected_edge = self.select(current_node)
             current_node = selected_edge.to_node
-            l+=1
+            l += 1
         self.expand(current_node)
         if current_node.is_root():
-            v=0
+            v = 0
         else:
-            v=current_node.from_edge.value
+            v = current_node.from_edge.value
         self.backup(current_node, v)
         return l
 
-    def is_terminal(self):
-        # TODO
-        return False
-
-    def temperature_adjust(self, count):
-        return count ** (1 / self.temperature)
+    # def temperature_adjust(self, count):
+    #     return count ** (1 / self.temperature)
 
     def select(self, node):
         """
@@ -121,32 +154,60 @@ class MCTS:
         :param node:
         :return:
         """
+        # if the node is being expanded, then all of its children do not have value and probability, thus
+        # select() must wait
+        # block if the first acquire does not open
+        # unblock if no lock on semaphore, where the values of the node has been assigned
+
+        # this acquire blocks for quite a while to wait for the gpu thread to return answer,
+        # we should share some of the tasks
+        # let's release the lock when logits are ready, but probability might not be computed
+        node.lock.acquire()
+        if not node.probability_ready:
+            # COMMENT THIS OUT TO USE OLD FUNCTION
+            for edge in node.edges:
+                edge.value=edge.value.item()
+                edge.logit=edge.logit.item()
+            # COMMENT THIS OUT TO USE OLD FUNCTION
+
+            # probability
+            prob_tensor = self.nn.logits_to_probability(torch.Tensor([edge.logit for edge in node.edges]))
+            prob_array = prob_tensor.numpy()
+            prob_list = prob_array.tolist()
+            for ie, edge in enumerate(node.edges):
+                edge.prior_probability = prob_list[ie]
+            node.probability_ready=True
+        node.lock.release()
+
         # argmax_input_list = contains a list of [Q(s,a)+U(s,a)] vals of all outbound edges of a node
         QU = []
         # every node/node should have a list of next possible actions
         # loop through all the child edges of a node
         if node.is_root():
-            sumnsb=0
+            sumnsb = 1
             for edge in node.edges:
-                sumnsb+=edge.visit_count
+                sumnsb += edge.visit_count
         else:
-            sumnsb=node.from_edge.visit_count
+            sumnsb = node.from_edge.visit_count
 
         for edge in node.edges:
             Nsa = edge.visit_count
             # Nsb = sum(edge.sibling_visit_count_list)  # does Nsb mean edge sibling visit count ? <verify>
             # u(s,a) = controls exploration
+            if edge.prior_probability is None:
+                print("RACE CONDITION")
+                print(node.is_root())
             Usa = (self.puct * edge.prior_probability * math.sqrt(sumnsb)) / (1 + Nsa)
             QU.append(edge.mean_action_value + Usa)
 
         # pick the edge that is returned by the argmax and return it
         # make it node
-        maxqu=-float('inf')
-        maxedx=None
+        maxqu = -float('inf')
+        maxedx = None
         for edx, qu in enumerate(QU):
             if qu > maxqu:
-                maxedx=edx
-                maxqu=qu
+                maxedx = edx
+                maxqu = qu
         selected_edge = node.edges[maxedx]
         return selected_edge
 
@@ -159,7 +220,7 @@ class MCTS:
         """
 
         # will call assign value for each child
-        terminal=leaf_node.construct_edges()
+        terminal = leaf_node.construct_edges()
         if terminal:
             return
 
@@ -171,17 +232,8 @@ class MCTS:
         #     # update perma tree with current edge
         #     # self.permaTree.update(edge)
 
-        # initialize value of all children
-        children_value_tensor = leaf_node.assign_children_values(self.nn)
-
-        # initialize the prior probability of all children
-        p = self.nn.children_values_to_probability(children_value_tensor)
-        # assert that all edges must not be shuffled
-        # this should only be used for MCTS, not training. no gradient is here.
-        npp = p.cpu().numpy().tolist()
-        for edx, edge in enumerate(leaf_node.edges):
-            edge.prior_probability = npp[edx]
-
+        # initialize value and probability of all children
+        leaf_node.put_children_on_nn_queue(self.nn_queue)
 
     def backup(self, leaf_node, v):
         """
@@ -199,15 +251,17 @@ class MCTS:
             edge.mean_action_value = edge.total_action_value / edge.visit_count
             current_node = edge.from_node
 
-class TimeStep:
-    def __init__(self, node_state, children_states, mcts_pi):
-        self.node_state=node_state
-        self.children_states=children_states
-        self.mcts_pi=mcts_pi
+    def print_root(self):
+        self.permaTree.root.checker_state.print_board()
 
-if __name__ == '__main__':
-    from neuralnetwork import NoPolicy
-    nn = NoPolicy()
-    mcts = MCTS(nn)
-    mcts.play_until_terminal()
-    print(mcts.time_steps)
+# interfaces with the Zero
+class TimeStep:
+    def __init__(self, checker_state, children_states, mcts_pi):
+        self.checker_state = checker_state
+        self.children_states = children_states
+        self.pi = mcts_pi
+        self.z=None
+
+        # neural network output ref holder
+        self.v=None
+        self.logits=None
