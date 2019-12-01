@@ -3,6 +3,7 @@
 # We then sample the MCTS timesteps to train the neural network (how many times?)
 # Then we repeat. (with new MCTS tree? right?)
 # We need to design the asynchronous behavior.
+from collections import deque
 
 from mcts import MCTS, TimeStep
 from neuralnetwork import NoPolicy, PaperLoss, YesPolicy
@@ -19,6 +20,7 @@ import numpy as np
 import time
 import queue
 import threading
+import pickle
 
 
 class AlphaZero:
@@ -50,16 +52,13 @@ class AlphaZero:
 
         self.total_game_refresh = 20
         self.reuse_game_interval = 2000
-        self.validation_period = 100
+        self.validation_period = 2000
+        self.validation_size = 200
         self.print_period = 10
         self.save_period = 1000
         self.log_file = "log/" + self.model_name + "_" + datetime_filename() + ".txt"
         self.log_file = Path(self.log_file)
         self.refresh_period = 10
-
-        self.starting_epoch=0
-        self.starting_iteration=0
-        self.load_model()
 
         # Pass to MCTS and other methods
         self.max_game_length = 200
@@ -69,14 +68,29 @@ class AlphaZero:
         self.debug = True
         self.max_queue_size = self.eval_batch_size*2
 
-        # self.fast_settings()
+        self.seed=164
+        random.seed(self.seed)
+        np.random.seed(self.seed)
+        torch.manual_seed(self.seed)
+
+
+        self.fast=True
+        if self.fast:
+            self.fast_settings()
+
+        self.starting_epoch=0
+        self.starting_iteration=0
+        if not self.fast:
+            self.load_model()
 
     def fast_settings(self):
         self.max_game_length=4
         self.simulations_per_play=10
         self.games_per_refresh=2
+        self.training_time_step_batch_size=4
+        self.fast=True
 
-    def mcts_refresh_game(self):
+    def mcts_refresh_game(self, epoch):
         with torch.no_grad():
             self.nn.eval()
             self.time_steps = []
@@ -89,31 +103,53 @@ class AlphaZero:
                 mcts = MCTS(nn_thread_edge_queue, self.nn, self.is_cuda,
                             self.max_game_length, self.simulations_per_play,
                             self.debug)
+                mcts.puct_scheduler(epoch)
                 mcts.play_until_terminal()
                 nn_thread_edge_queue.put(None)
                 # print("Terminal sentinel is put on queue")
                 nn_thread_edge_queue.join()
-                if self.debug:
-                    print("Queue has joined")
+                # if self.debug:
+                #     print("Queue has joined")
                 gpu_thread.join()
-                if self.debug:
-                    print("Thread has joined")
+                # if self.debug:
+                #     print("Thread has joined")
                 self.time_steps += mcts.time_steps
                 print("Successful generation of one game")
-                print("Queue empty:", nn_thread_edge_queue.empty())
+                # print("Queue empty:", nn_thread_edge_queue.empty())
+            # check if any time step do not have children
+            self.time_steps=[ts for ts in self.time_steps if len(ts.children_states)!=0]
+
+            if not self.fast:
+                self.save_games()
+
+    def save_games(self):
+        with open('timesteps', "wb") as f:
+            pickle.dump(self.time_steps, f)
+
+    def load_games(self):
+        with open("timesteps", "rb") as f:
+            self.time_steps=pickle.load(f)
 
     def train(self):
+        queuelen=50
+        vdq=deque(maxlen=queuelen)
+        ptq=deque(maxlen=queuelen)
         for epoch in range(self.starting_epoch, self.total_game_refresh):
-            self.mcts_refresh_game()
+            if not self.fast:
+                self.mcts_refresh_game(epoch)
+            else:
+                self.load_games()
             for ti in range(self.starting_iteration, self.reuse_game_interval):
                 train_vloss, train_ploss = self.train_one_round()
+                vdq.append(train_vloss)
+                ptq.append(train_ploss)
                 if ti % self.print_period == 0:
                     self.log_print(
                         "%14s " % self.model_name +
                         "train epoch %4d, batch %4d. running value loss: %.5f. running policy loss: %.5f" %
-                        (epoch, ti, train_vloss, train_ploss))
+                        (epoch, ti, sum(vdq)/len(vdq), sum(ptq)/len(ptq)))
                 if ti % self.validation_period == 0:
-                    valid_vloss, valid_ploss = self.validate_one_round()
+                    valid_vloss, valid_ploss = self.validate()
                     self.log_print(
                         "%14s " % self.model_name +
                         "valid epoch %4d, batch %4d. validation value loss: %.5f. validation policy loss: %.5f" %
@@ -137,27 +173,35 @@ class AlphaZero:
         # queue up children_states
         # slice output tensor
         # tss_policy_output = {}
-        #
+
         policy_inputs_queue = []
         dim_ts = []
         for ts in sampled_tss:
             ts.logits = []
             for child in ts.children_states:
-                if len(policy_inputs_queue) != self.neural_network_batch_size:
+                if len(policy_inputs_queue) != self.neural_network_batch_size+1:
                     # queue up
                     dim_ts.append(ts)
                     policy_inputs_queue.append(child)
                 else:
                     ### process
-                    self.policy_bonanza(policy_inputs_queue, dim_ts)
+                    self.get_policy_logits(policy_inputs_queue, dim_ts)
                     policy_inputs_queue = []
                     dim_ts = []
         # remnant in the queue
-        self.policy_bonanza(policy_inputs_queue, dim_ts)
+        if len(policy_inputs_queue)!=0:
+            self.get_policy_logits(policy_inputs_queue, dim_ts)
 
         # policy transpose
         for ts in sampled_tss:
             ts.logits = torch.cat(ts.logits)
+            try:
+                assert(ts.logits.shape[0]==len(ts.children_states))
+            except AssertionError:
+                for tsidx, ts in enumerate(az.time_steps):
+                    if ts.logits is not None:
+                        if ts.logits.shape[0]!=len(ts.children_states):
+                            print(tsidx)
 
         # loss calculation
         vloss, ploss = 0, 0
@@ -169,33 +213,46 @@ class AlphaZero:
                 z = z.cuda()
                 pi = pi.cuda()
 
-            ret= self.loss_fn(ts.v, z, ts.logits, pi)
+            ret= self.loss_fn(ts.v, z+10000, ts.logits, pi)
             vloss+=ret[0]
             ploss+=ret[1]
         vloss=vloss/ self.neural_network_batch_size
         ploss=ploss/self.neural_network_batch_size
         return vloss, ploss
 
-    def policy_bonanza(self, policy_inputs_queue, dim_ts):
+    def get_policy_logits(self, policy_inputs_queue, dim_ts):
+        """
+
+        :param policy_inputs_queue: a list of checker states that need policy logits
+        :param dim_ts:
+        :return:
+        """
+        assert(len(policy_inputs_queue)==len(dim_ts))
         policy_tensor = states_to_batch_tensor(policy_inputs_queue, self.is_cuda)
         policy_output, _ = self.nn(policy_tensor)
-        # slice and append
-        last_ts = None
-        tsbegin = None
         for tsidx, ts in enumerate(dim_ts):
-            if ts != last_ts:
-                if last_ts is not None:
-                    # slice the policy output
-                    # not including tsidx
-                    last_ts.logits.append(policy_output[tsbegin: tsidx, :])
-                    # tss_policy_output[ts].append(policy_output[tsbegin: ts, :, :])
-                last_ts = ts
-                tsbegin = tsidx
-        # take care of the last ones
-        # tss_policy_output[ts].append(policy_output[tsbegin: ts, :, :])
-        # including tsidx
-        assert (tsidx + 1 == len(dim_ts))
-        ts.logits.append(policy_output[tsbegin: tsidx + 1, :])
+            ts.logits.append(policy_output[tsidx,:])
+
+        # policy_tensor = states_to_batch_tensor(policy_inputs_queue, self.is_cuda)
+        # policy_output, _ = self.nn(policy_tensor)
+        # # slice and append
+        # last_ts = None
+        # tsbegin = None
+        # assert (len(policy_inputs_queue)==len(dim_ts))
+        # for tsidx, ts in enumerate(dim_ts):
+        #     if ts != last_ts:
+        #         if last_ts is not None:
+        #             # slice the policy output
+        #             # not including tsidx
+        #             last_ts.logits.append(policy_output[tsbegin: tsidx, :])
+        #             # tss_policy_output[ts].append(policy_output[tsbegin: ts, :, :])
+        #         last_ts = ts
+        #         tsbegin = tsidx
+        # # take care of the last ones
+        # # tss_policy_output[ts].append(policy_output[tsbegin: ts, :, :])
+        # # including tsidx
+        # assert (tsidx + 1 == len(dim_ts))
+        # ts.logits.append(policy_output[tsbegin: tsidx + 1, :])
 
     def train_one_round(self):
         self.nn.train()
@@ -207,13 +264,23 @@ class AlphaZero:
         self.optim.step()
         return vloss.item(), ploss.item()
 
+    def validate(self):
+        vls=[]
+        pls=[]
+        for i in range(self.validation_size):
+            # if i % self.print_period==0:
+            #     print("Validating batch", i)
+            vl, pl=self.validate_one_round()
+            vls.append(vl)
+            pls.append(pl)
+        return np.sum(vls)/self.validation_size, np.sum(pls)/self.validation_size
+
     def validate_one_round(self):
         with torch.no_grad():
             self.nn.eval()
             # sample self.batch_size number of time steps, bundle them together
             sampled_tss = random.sample(self.time_steps, k=self.training_time_step_batch_size)
             vloss, ploss = self.run_one_round(sampled_tss)
-            loss = vloss + ploss
         return vloss.item(), ploss.item()
 
     def time_steps_to_tensor(self, batch_tss):
@@ -238,18 +305,18 @@ class AlphaZero:
         print(string)
 
     def save_model(self, epoch, iteration):
+        if not self.fast:
+            epoch = int(epoch)
+            task_dir = os.path.dirname(abspath(__file__))
+            if not os.path.isdir(Path(task_dir) / "saves"):
+                os.mkdir(Path(task_dir) / "saves")
 
-        epoch = int(epoch)
-        task_dir = os.path.dirname(abspath(__file__))
-        if not os.path.isdir(Path(task_dir) / "saves"):
-            os.mkdir(Path(task_dir) / "saves")
+            pickle_file = Path(task_dir).joinpath(
+                "saves/" + self.model_name + "_" + str(epoch) + "_" + str(iteration) + ".pkl")
+            with pickle_file.open('wb') as fhand:
+                torch.save((self.nn.state_dict(), self.optim, epoch, iteration), fhand)
 
-        pickle_file = Path(task_dir).joinpath(
-            "saves/" + self.model_name + "_" + str(epoch) + "_" + str(iteration) + ".pkl")
-        with pickle_file.open('wb') as fhand:
-            torch.save((self.nn.state_dict(), self.optim, epoch, iteration), fhand)
-
-        print("saved model", self.model_name, "at", pickle_file)
+            print("saved model", self.model_name, "at", pickle_file)
 
     def load_model(self):
         """
