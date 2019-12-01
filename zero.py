@@ -73,8 +73,7 @@ class AlphaZero:
         np.random.seed(self.seed)
         torch.manual_seed(self.seed)
 
-
-        self.fast=True
+        self.fast=False
         if self.fast:
             self.fast_settings()
 
@@ -88,7 +87,6 @@ class AlphaZero:
         self.simulations_per_play=10
         self.games_per_refresh=2
         self.training_time_step_batch_size=4
-        self.fast=True
 
     def mcts_refresh_game(self, epoch):
         with torch.no_grad():
@@ -134,26 +132,30 @@ class AlphaZero:
         queuelen=50
         vdq=deque(maxlen=queuelen)
         ptq=deque(maxlen=queuelen)
+        pdiffdq=deque(maxlen=queuelen)
         for epoch in range(self.starting_epoch, self.total_game_refresh):
             if not self.fast:
                 self.mcts_refresh_game(epoch)
             else:
                 self.load_games()
             for ti in range(self.starting_iteration, self.reuse_game_interval):
-                train_vloss, train_ploss = self.train_one_round()
+                train_vloss, train_ploss, pdiff = self.train_one_round()
                 vdq.append(train_vloss)
                 ptq.append(train_ploss)
+                pdiffdq.append(pdiff)
                 if ti % self.print_period == 0:
                     self.log_print(
                         "%14s " % self.model_name +
-                        "train epoch %4d, batch %4d. running value loss: %.5f. running policy loss: %.5f" %
-                        (epoch, ti, sum(vdq)/len(vdq), sum(ptq)/len(ptq)))
+                        "train epoch %4d, batch %4d. running value loss: %.5f. running policy loss: %.5f. "
+                        "running p diff: %.5f" %
+                        (epoch, ti, sum(vdq)/len(vdq), sum(ptq)/len(ptq), sum(pdiffdq)/len(pdiffdq)))
                 if ti % self.validation_period == 0:
-                    valid_vloss, valid_ploss = self.validate()
+                    valid_vloss, valid_ploss, valid_pdiff = self.validate()
                     self.log_print(
                         "%14s " % self.model_name +
-                        "valid epoch %4d, batch %4d. validation value loss: %.5f. validation policy loss: %.5f" %
-                        (epoch, ti, valid_vloss, valid_ploss))
+                        "valid epoch %4d, batch %4d. validation value loss: %.5f. validation policy loss: %.5f "
+                        "validation p diff: %.5f" %
+                        (epoch, ti, valid_vloss, valid_ploss, valid_pdiff))
                 if ti % self.save_period == 0:
                     self.save_model(epoch, ti)
 
@@ -204,7 +206,7 @@ class AlphaZero:
                             print(tsidx)
 
         # loss calculation
-        vloss, ploss = 0, 0
+        vloss, ploss, pdiff = 0, 0, 0
         for ts in sampled_tss:
             # should we reinitialize every time or store them?
             z = torch.Tensor([ts.z])
@@ -213,12 +215,14 @@ class AlphaZero:
                 z = z.cuda()
                 pi = pi.cuda()
 
-            ret= self.loss_fn(ts.v, z+10000, ts.logits, pi)
+            ret= self.loss_fn(ts.v, z, ts.logits, pi)
             vloss+=ret[0]
             ploss+=ret[1]
+            pdiff+=ret[2]
         vloss=vloss/ self.neural_network_batch_size
         ploss=ploss/self.neural_network_batch_size
-        return vloss, ploss
+        pdiff=pdiff/self.neural_network_batch_size
+        return vloss, ploss, pdiff
 
     def get_policy_logits(self, policy_inputs_queue, dim_ts):
         """
@@ -258,30 +262,32 @@ class AlphaZero:
         self.nn.train()
         # sample self.batch_size number of time steps, bundle them together
         sampled_tss = random.sample(self.time_steps, k=self.training_time_step_batch_size)
-        vloss, ploss = self.run_one_round(sampled_tss)
+        vloss, ploss, pdiff = self.run_one_round(sampled_tss)
         loss=vloss+ploss
         loss.backward()
         self.optim.step()
-        return vloss.item(), ploss.item()
+        return vloss.item(), ploss.item(), pdiff
 
     def validate(self):
         vls=[]
         pls=[]
+        pdiff=[]
         for i in range(self.validation_size):
             # if i % self.print_period==0:
             #     print("Validating batch", i)
-            vl, pl=self.validate_one_round()
+            vl, pl, pd=self.validate_one_round()
             vls.append(vl)
             pls.append(pl)
-        return np.sum(vls)/self.validation_size, np.sum(pls)/self.validation_size
+            pdiff.append(pd)
+        return np.sum(vls)/self.validation_size, np.sum(pls)/self.validation_size, np.sum(pdiff)/self.validation_size
 
     def validate_one_round(self):
         with torch.no_grad():
             self.nn.eval()
             # sample self.batch_size number of time steps, bundle them together
             sampled_tss = random.sample(self.time_steps, k=self.training_time_step_batch_size)
-            vloss, ploss = self.run_one_round(sampled_tss)
-        return vloss.item(), ploss.item()
+            vloss, ploss, pdiff = self.run_one_round(sampled_tss)
+        return vloss.item(), ploss.item(), pdiff
 
     def time_steps_to_tensor(self, batch_tss):
         # what is the strategy for training time neural network call?
