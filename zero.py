@@ -37,7 +37,6 @@ class AlphaZero:
         self.is_cuda = is_cuda
         if self.is_cuda:
             self.nn = self.nn.cuda()
-        # TODO
         self.loss_fn = PaperLoss()
         self.optim = torch.optim.Adam(self.nn.parameters(), weight_decay=0.01)
         # control how many time steps each loss.backwards() is called for.
@@ -45,13 +44,16 @@ class AlphaZero:
         self.training_time_step_batch_size = 32
         # controls how many boards is fed into a neural network at once
         # controls the speed of gpu computation.
-        self.neural_network_batch_size = 256
+        self.neural_network_batch_size = 1024
         # time steps contain up to self.game_size different games.
         self.time_steps = []
         self.games_per_refresh = 8
+        # keep at most 4096 games
+        # controls the variance versus the training speed, higher means lower variance but slower training
+        self.max_time_steps_length=4096
 
-        self.total_game_refresh = 20
-        self.reuse_game_interval = 2000
+        self.total_game_refresh = 200
+        self.reuse_game_interval = 512000//self.neural_network_batch_size
         self.validation_period = 2000
         self.validation_size = 200
         self.print_period = 10
@@ -68,10 +70,9 @@ class AlphaZero:
         self.debug = True
         self.max_queue_size = self.eval_batch_size*2
 
-        self.seed=164
-        random.seed(self.seed)
-        np.random.seed(self.seed)
-        torch.manual_seed(self.seed)
+        # random.seed(self.seed)
+        # np.random.seed(self.seed)
+        # torch.manual_seed(self.seed)
 
         self.fast=False
         if self.fast:
@@ -91,7 +92,7 @@ class AlphaZero:
     def mcts_refresh_game(self, epoch):
         with torch.no_grad():
             self.nn.eval()
-            self.time_steps = []
+            new_time_steps = []
             for i in range(self.games_per_refresh):
                 nn_thread_edge_queue = queue.Queue(maxsize=self.max_queue_size)
                 # def gpu_thread_worker(nn, queue, eval_batch_size, is_cuda):
@@ -111,17 +112,26 @@ class AlphaZero:
                 gpu_thread.join()
                 # if self.debug:
                 #     print("Thread has joined")
-                self.time_steps += mcts.time_steps
+                new_time_steps += mcts.time_steps
                 print("Successful generation of one game")
                 # print("Queue empty:", nn_thread_edge_queue.empty())
             # check if any time step do not have children
-            self.time_steps=[ts for ts in self.time_steps if len(ts.children_states)!=0]
+            new_time_steps=[ts for ts in new_time_steps if len(ts.children_states)!=0]
+            old_remove=len(new_time_steps)+len(self.time_steps)-self.max_time_steps_length
+            if old_remove>0:
+                old_retain=len(self.time_steps)-old_remove
+                self.time_steps=random.sample(self.time_steps, k=old_retain)
+            self.time_steps=self.time_steps+new_time_steps
 
             if not self.fast:
                 self.save_games()
 
-    def save_games(self):
-        with open('timesteps', "wb") as f:
+    def save_games(self,i=None):
+        if i != None:
+            name="timesteps_"+str(i)
+        else:
+            name="timesteps"
+        with open(name, "wb") as f:
             pickle.dump(self.time_steps, f)
 
     def load_games(self):
