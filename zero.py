@@ -47,14 +47,13 @@ class AlphaZero:
         self.nn_train_batch_size = 1024
         # time steps contain up to self.game_size different games.
         self.time_steps = []
-        self.games_per_refresh = 16
+        self.games_per_refresh = 8
         # keep at most 4096 games
         # controls the variance versus the training speed, higher means lower variance but slower training
-        self.max_time_steps_length=4096
+        self.max_time_steps_length=1024
 
         self.total_game_refresh = 200
-        # training too long causes the loss to diverge instead. crazy phenomenon
-        self.reuse_game_interval = 512000//self.nn_train_batch_size
+        self.reuse_game_interval = 1024000//self.nn_train_batch_size
         self.validation_period = 2000
         self.validation_size = 200
         self.print_period = 10
@@ -138,8 +137,9 @@ class AlphaZero:
             new_time_steps=[ts for ts in new_time_steps if len(ts.children_states)!=0]
             old_remove=len(new_time_steps)+len(self.time_steps)-self.max_time_steps_length
             if old_remove<0:
-                # always remove 5% of the games
-                old_remove=len(self.time_steps)//20
+                # always remove 10% of the games
+                # running keep 160 games per sampling population
+                old_remove=len(self.time_steps)//10
             old_retain=len(self.time_steps)-old_remove
             self.time_steps=random.sample(self.time_steps, k=old_retain)
             self.time_steps=self.time_steps+new_time_steps
