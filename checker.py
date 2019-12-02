@@ -476,7 +476,11 @@ class CheckerState(dict):
         new_state = CheckerState(new_board, flipped=not self.flipped)
         return new_state
 
-    def evaluate(self):
+    def first_player_evaluate(self):
+        """
+        First player view evaluation
+        :return:
+        """
         if not self.flipped:
             return self.board.sum()
         else:

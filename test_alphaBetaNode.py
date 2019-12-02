@@ -18,7 +18,7 @@ class TestAlphaBetaNode(TestCase):
 
         alpha.make_children()
         for child in alpha.children:
-            self.assertTrue(child.evaluate()== val)
+            self.assertTrue(child.first_player_evaluate() == val)
 
     def test_game(self):
         ab = AlphaBeta(4)

@@ -119,7 +119,7 @@ class NoPolicy(Model):
 
 class YesPolicy(Model):
     def __init__(self):
-        scale = 64
+        scale = 512
         tower_len = 9
         super(YesPolicy, self).__init__()
         self.conv1 = nn.Conv2d(4, scale, 3, padding=1)
@@ -153,7 +153,8 @@ class YesPolicy(Model):
         A second design
 
         :param input_tensor: a batch tensor
-        :return: value of the state
+        :return: policy logits, not probability
+                 value
         """
         out = self.conv1(input_tensor)
         out1 = self.bn1(out)
@@ -166,7 +167,6 @@ class YesPolicy(Model):
         p2 = self.policy_linear_1(p2)
         p2 = torch.relu(p2)
         p2 = self.policy_linear_2(p2)
-        p2 = torch.tanh(p2)
 
         v = self.value_head(out3)
         v1 = v.reshape(v.shape[0], -1)
@@ -182,6 +182,7 @@ class PaperLoss(nn.Module):
         super(PaperLoss, self).__init__()
         self.l1 = torch.nn.L1Loss()
         self.lsm = nn.LogSoftmax(dim=0)
+        self.sm = nn.Softmax(dim=0)
 
     def forward(self, v, z, logit_p, pi):
         """
@@ -191,11 +192,16 @@ class PaperLoss(nn.Module):
         :param logit_p: the nn output logits
         :param pi: the mcts target pi
         :return:
+        value loss
+        policy loss
+        probability prediction difference
         """
         lsm = self.lsm(logit_p)
         ret1 = self.l1(v, z)
         ret2 = - torch.sum(pi * lsm)
-        return ret1, ret2
+        # I collect the l1 p difference because the ret2 is not interpretable due to variable dimensions
+        ret3 = (self.sm(logit_p)-pi).abs().sum().item()
+        return ret1, ret2, ret3
 
 
 def states_to_batch_tensor(states, is_cuda):

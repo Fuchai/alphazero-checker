@@ -25,7 +25,7 @@ class MCTS:
         # changes to False after the first 30 moves
         self.temperature = True
         self.temperature_change_at = 30
-        self.puct = 10000
+        self.puct = None
         self.max_game_length = max_game_length
         self.time_steps = []
         self.is_cuda = is_cuda
@@ -39,9 +39,11 @@ class MCTS:
         when terminal, the winner is calculated, and all data points get an extra value
         :return:
         """
+        if self.debug:
+            print("Generating a new game with MCTS")
         for step in range(self.max_game_length):
-            # if step % 10 == 0:
-            print("Game step " + str(step) + " /" + str(self.max_game_length))
+            if step % 10 == 0:
+                print("Game step " + str(step) + " /" + str(self.max_game_length))
             if step == self.temperature_change_at:
                 self.temperature = False
             if self.debug:
@@ -50,32 +52,39 @@ class MCTS:
                 self.simulation()
                 # if simulation % 40 == 0 and self.debug:
                     # print("Simulation " + str(simulation) + " /" + str(self.simulations_per_play))
-            if self.debug:
-                t1 = time.time()
-                print("Time per play: " + str(t1 - t0))
-                self.permaTree.root.checker_state.print_board()
+            # if self.debug:
+                # t1 = time.time()
+                # print("Time per play: " + str(t1 - t0))
+                # self.permaTree.root.checker_state.print_board()
             terminal = self.play()
             if terminal:
                 print("Terminated at step", step)
                 break
 
         # there will be an outcome whether the game reaches terminal or not
-        final_state = self.permaTree.root.checker_state
-        outcome = final_state.evaluate()
+        # final_state = self.permaTree.root.checker_state
+        # outcome = final_state.evaluate()
+        #
+        # # TODO not continuous outcome currently
+        # if outcome == 0:
+        #     z = 0
+        # else:
+        #     # truth table:
+        #     #      flipped  not flipped
+        #     # o>0    -1          1
+        #     # o<0     1         -1
+        #
+        #     a = final_state.flipped
+        #     b = outcome > 0
+        #     z = a ^ b
+        #     z = z * 2 - 1
+        #
+        # if z==1:
+        #     print("Won.")
+        #     self.permaTree.root.checker_state.print_board()
 
-        # TODO not continuous outcome currently
-        if outcome == 0:
-            z = 0
-        else:
-            # truth table:
-            #      flipped  not flipped
-            # o>0    -1          1
-            # o<0     1         -1
-
-            a = final_state.flipped
-            b = outcome > 0
-            z = a ^ b
-            z = z * 2 - 1
+        final_node=self.permaTree.root
+        z=self.find_winner(final_node)
 
         # assign z
         for ts in self.time_steps:
@@ -83,6 +92,36 @@ class MCTS:
                 ts.z = z
             else:
                 ts.z = -z
+
+    def find_winner(self, mcts_node):
+        state=mcts_node.checker_state
+        outcome = state.first_player_evaluate()
+
+        # TODO not continuous outcome currently
+        if outcome == 0:
+            z = 0
+        elif outcome>0:
+            z=1
+        else:
+            z=-1
+        # else:
+        #     # truth table:
+        #     #      flipped  not flipped
+        #     # o>0    -1          1
+        #     # o<0     1         -1
+        #
+        #     a = state.flipped
+        #     b = outcome > 0
+        #     z = a ^ b
+        #     z = z * 2 - 1
+
+        if z == 1:
+            print("First player won.")
+        else:
+            print("Second player won")
+
+        self.permaTree.root.checker_state.print_board()
+        return z
 
     def play(self):
         """
@@ -97,13 +136,13 @@ class MCTS:
         root = self.permaTree.root
         if len(root.edges) == 0:
             return 1
-        scores = []
+        visits = []
         for level_one_edge in root.edges:
             vc = level_one_edge.visit_count
-            scores.append(vc)
+            visits.append(vc)
         if self.temperature:
-            sum_scores = sum(scores)
-            pi = [score / sum_scores for score in scores]
+            sum_visits = sum(visits)
+            pi = [visit / sum_visits for visit in visits]
             # samples instead
 
             sampled_action = random.choices(range(len(root.edges)), weights=pi, k=1)
@@ -112,11 +151,11 @@ class MCTS:
         else:
             maxscore = - float("inf")
             maxedx = None
-            for edx, score in enumerate(scores):
+            for edx, score in enumerate(visits):
                 if score > maxscore:
                     maxedx = edx
                     maxscore = score
-            pi = [0] * len(scores)
+            pi = [0] * len(visits)
             pi[maxedx] = 1
             max_action = root.edges[maxedx]
             self.permaTree.move_root(max_action.to_node)
@@ -253,6 +292,9 @@ class MCTS:
 
     def print_root(self):
         self.permaTree.root.checker_state.print_board()
+
+    def puct_scheduler(self,epoch):
+        self.puct=4
 
 # interfaces with the Zero
 class TimeStep:
