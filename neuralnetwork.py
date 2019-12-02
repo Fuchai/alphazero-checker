@@ -200,7 +200,7 @@ class PaperLoss(nn.Module):
         ret1 = self.l1(v, z)
         ret2 = - torch.sum(pi * lsm)
         # I collect the l1 p difference because the ret2 is not interpretable due to variable dimensions
-        ret3 = (self.sm(logit_p)-pi).abs().sum().item()
+        ret3 = (self.sm(logit_p)-pi).abs().mean().item()
         return ret1, ret2, ret3
 
 

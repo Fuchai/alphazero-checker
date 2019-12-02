@@ -41,10 +41,10 @@ class AlphaZero:
         self.optim = torch.optim.Adam(self.nn.parameters(), weight_decay=0.01)
         # control how many time steps each loss.backwards() is called for.
         # controls the GPU memory allocation
-        self.training_validation_time_step_batch_size = 32
+        self.time_step_sample_size = 4096
         # controls how many boards is fed into a neural network at once
         # controls the speed of gpu computation.
-        self.nn_train_batch_size = 1024
+        self.nn_feeding_batch_size = 256
         # time steps contain up to self.game_size different games.
         self.training_time_steps = []
         self.validation_time_steps = []
@@ -55,7 +55,7 @@ class AlphaZero:
         self.replace_ratio_per_refresh=10
 
         self.total_game_refresh = 200
-        self.reuse_game_interval = 1024000//self.nn_train_batch_size
+        self.reuse_game_interval = 1024000//self.time_step_sample_size
         self.validation_period = 2000
         self.validation_size = 200
         self.print_period = 10
@@ -72,9 +72,10 @@ class AlphaZero:
         self.debug = True
         self.max_queue_size = self.eval_batch_size*2
 
-        # random.seed(self.seed)
-        # np.random.seed(self.seed)
-        # torch.manual_seed(self.seed)
+        self.seed=123
+        random.seed(self.seed)
+        np.random.seed(self.seed)
+        torch.manual_seed(self.seed)
 
         self.fast=False
         if self.fast:
@@ -89,7 +90,8 @@ class AlphaZero:
     def fast_settings(self):
         self.max_game_length=4
         self.simulations_per_play=10
-        self.training_validation_time_step_batch_size=4
+        self._tsss=self.time_step_sample_size
+        self.time_step_sample_size=4
 
     def mcts_add_game(self, epoch):
         with torch.no_grad():
@@ -237,10 +239,10 @@ class AlphaZero:
 
     def run_one_round(self, sampled_tss):
         # compile value tensor
-        value_batches = len(sampled_tss) // self.nn_train_batch_size + 1
+        value_batches = len(sampled_tss) // self.nn_feeding_batch_size
         for batch_idx in range(value_batches):
             batch_tss = sampled_tss[
-                        batch_idx * self.nn_train_batch_size: (batch_idx + 1) * self.nn_train_batch_size]
+                        batch_idx * self.nn_feeding_batch_size: (batch_idx + 1) * self.nn_feeding_batch_size]
             value_inputs = [ts.checker_state for ts in batch_tss]
             value_tensor = states_to_batch_tensor(value_inputs, is_cuda=self.is_cuda)
             _, value_output = self.nn(value_tensor)
@@ -256,8 +258,10 @@ class AlphaZero:
         dim_ts = []
         for ts in sampled_tss:
             ts.logits = []
+            # if ts is az.training_time_steps[3336]:
+            #     print("Stop here")
             for child in ts.children_states:
-                if len(policy_inputs_queue) != self.nn_train_batch_size+1:
+                if len(policy_inputs_queue) != self.nn_feeding_batch_size+1:
                     # queue up
                     dim_ts.append(ts)
                     policy_inputs_queue.append(child)
@@ -266,20 +270,26 @@ class AlphaZero:
                     self.get_policy_logits(policy_inputs_queue, dim_ts)
                     policy_inputs_queue = []
                     dim_ts = []
+                    dim_ts.append(ts)
+                    policy_inputs_queue.append(child)
         # remnant in the queue
         if len(policy_inputs_queue)!=0:
             self.get_policy_logits(policy_inputs_queue, dim_ts)
 
         # policy transpose
+        problem=False
         for ts in sampled_tss:
             ts.logits = torch.cat(ts.logits)
-            try:
-                assert(ts.logits.shape[0]==len(ts.children_states))
-            except AssertionError:
-                for tsidx, ts in enumerate(az.training_time_steps):
-                    if ts.logits is not None:
-                        if ts.logits.shape[0]!=len(ts.children_states):
-                            print(tsidx)
+        #     try:
+        #         assert(ts.logits.shape[0]==len(ts.children_states))
+        #     except AssertionError:
+        #         for tsidx, ts in enumerate(az.training_time_steps):
+        #             if ts.logits is not None:
+        #                 if ts.logits.shape[0]!=len(ts.children_states):
+        #                     print(tsidx)
+        #                     problem=True
+        # if problem:
+        #     assert False
 
         # loss calculation
         vloss, ploss, pdiff = 0, 0, 0
@@ -295,9 +305,9 @@ class AlphaZero:
             vloss+=ret[0]
             ploss+=ret[1]
             pdiff+=ret[2]
-        vloss=vloss/ self.nn_train_batch_size
-        ploss=ploss/self.nn_train_batch_size
-        pdiff=pdiff/self.nn_train_batch_size
+        vloss=vloss/ self.time_step_sample_size
+        ploss=ploss/self.time_step_sample_size
+        pdiff=pdiff/self.time_step_sample_size
         return vloss, ploss, pdiff
 
     def get_policy_logits(self, policy_inputs_queue, dim_ts):
@@ -337,7 +347,9 @@ class AlphaZero:
     def train_one_round(self):
         self.nn.train()
         # sample self.batch_size number of time steps, bundle them together
-        sampled_tss = random.sample(self.training_time_steps, k=self.training_validation_time_step_batch_size)
+        sampled_tss = random.sample(self.training_time_steps, k=self.time_step_sample_size)
+        if self.fast:
+            sampled_tss=(sampled_tss*(self._tsss//len(sampled_tss)+1))[:self._tsss]
         vloss, ploss, pdiff = self.run_one_round(sampled_tss)
         loss=vloss+ploss
         loss.backward()
@@ -361,7 +373,7 @@ class AlphaZero:
         with torch.no_grad():
             self.nn.eval()
             # sample self.batch_size number of time steps, bundle them together
-            sampled_tss = random.sample(self.validation_time_steps, k=self.training_validation_time_step_batch_size)
+            sampled_tss = random.sample(self.validation_time_steps, k=self.time_step_sample_size)
             vloss, ploss, pdiff = self.run_one_round(sampled_tss)
         return vloss.item(), ploss.item(), pdiff
 
