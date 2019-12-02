@@ -117,8 +117,11 @@ class MCTS:
 
         if z == 1:
             print("First player won.")
-        else:
+        elif z==-1:
             print("Second player won")
+        else:
+            assert (z==0)
+            print("Draw")
 
         self.permaTree.root.checker_state.print_board()
         return z

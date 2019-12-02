@@ -41,20 +41,21 @@ class AlphaZero:
         self.optim = torch.optim.Adam(self.nn.parameters(), weight_decay=0.01)
         # control how many time steps each loss.backwards() is called for.
         # controls the GPU memory allocation
-        self.training_time_step_batch_size = 32
+        self.training_validation_time_step_batch_size = 32
         # controls how many boards is fed into a neural network at once
         # controls the speed of gpu computation.
         self.nn_train_batch_size = 1024
         # time steps contain up to self.game_size different games.
-        self.time_steps = []
-        self.games_per_refresh = 16
-        # keep at most 4096 games
-        # controls the variance versus the training speed, higher means lower variance but slower training
-        self.max_time_steps_length=4096
+        self.training_time_steps = []
+        self.validation_time_steps = []
+        self.training_games_per_refresh = 7
+        self.validation_games_per_refresh=1
+        # controls the variance versus the training speed,
+        # higher means lower variance but slower training convergence due to bias
+        self.replace_ratio_per_refresh=10
 
         self.total_game_refresh = 200
-        # training too long causes the loss to diverge instead. crazy phenomenon
-        self.reuse_game_interval = 512000//self.nn_train_batch_size
+        self.reuse_game_interval = 1024000//self.nn_train_batch_size
         self.validation_period = 2000
         self.validation_size = 200
         self.print_period = 10
@@ -84,16 +85,17 @@ class AlphaZero:
         if not self.fast:
             self.load_model()
 
+
     def fast_settings(self):
         self.max_game_length=4
         self.simulations_per_play=10
-        self.games_per_refresh=8
-        self.training_time_step_batch_size=4
+        self.training_validation_time_step_batch_size=4
 
     def mcts_add_game(self, epoch):
         with torch.no_grad():
             self.nn.eval()
-            new_time_steps = []
+            new_train_time_steps = []
+            new_validation_time_steps=[]
             nn_thread_edge_queue = queue.Queue(maxsize=self.max_queue_size)
             # def gpu_thread_worker(nn, queue, eval_batch_size, is_cuda):
             gpu_thread = threading.Thread(target=gpu_thread_worker,
@@ -110,13 +112,21 @@ class AlphaZero:
             # 8 thread MCTS search
             ars=[]
             mcts_pool=ThreadPool(processes=8)
-            for i in range(self.games_per_refresh):
+            for i in range(self.training_games_per_refresh):
                 async_result=mcts_pool.apply_async(mcts_search_worker, args=(nn_thread_edge_queue,
                                                                              self.nn, self.is_cuda,
                                                                              self.max_game_length,
                                                                              self.simulations_per_play,
-                                                                             self.debug, epoch, new_time_steps))
+                                                                             self.debug, epoch, new_train_time_steps))
                 ars.append(async_result)
+            for i in range(self.validation_games_per_refresh):
+                async_result = mcts_pool.apply_async(mcts_search_worker, args=(nn_thread_edge_queue,
+                                                                               self.nn, self.is_cuda,
+                                                                               self.max_game_length,
+                                                                               self.simulations_per_play,
+                                                                               self.debug, epoch, new_validation_time_steps))
+                ars.append(async_result)
+
             mcts_pool.close()
             for ar in ars:
                 ar.wait()
@@ -135,26 +145,63 @@ class AlphaZero:
             print("Successful generation of many games?")
             print("Queue empty:", nn_thread_edge_queue.empty())
             # check if any time step do not have children
-            new_time_steps=[ts for ts in new_time_steps if len(ts.children_states)!=0]
-            old_remove=len(new_time_steps)+len(self.time_steps)-self.max_time_steps_length
-            if old_remove<0:
-                # always remove 5% of the games
-                old_remove=len(self.time_steps)//20
-            old_retain=len(self.time_steps)-old_remove
-            self.time_steps=random.sample(self.time_steps, k=old_retain)
-            self.time_steps=self.time_steps+new_time_steps
+            new_train_time_steps=[ts for ts in new_train_time_steps if len(ts.children_states)!=0]
+            new_validation_time_steps=[ts for ts in new_validation_time_steps if len(ts.children_states)!=0]
+
+            # perform validation and training split
+            # all_indices=list(range(len(new_train_time_steps)))
+            # random.shuffle(all_indices)
+            # total_valid_points=int(len(new_train_time_steps)*self.validation_split)
+            # new_valid_indices=all_indices[0:total_valid_points]
+            # new_train_indices=all_indices[total_valid_points:]
+            # new_valid_points=[new_train_time_steps[i] for i in new_valid_indices]
+            # new_train_points=[new_train_time_steps[i] for i in new_train_indices]
+
+            # append training
+            self.training_time_steps=self.refresh_helper(new_train_time_steps, self.training_time_steps)
+            # old_remove= len(new_train_points) + len(self.training_time_steps) - self.replace_ratio_per_refresh
+            # if old_remove<0:
+            #     # always remove 10% of the games
+            #     # running keep 160 games per sampling population
+            #     old_remove= len(self.training_time_steps) // 10
+            # old_retain= len(self.training_time_steps) - old_remove
+            # self.training_time_steps=random.sample(self.training_time_steps, k=old_retain)
+            # self.training_time_steps= self.training_time_steps + new_train_points
+
+            # append validation
+            self.validation_time_steps=self.refresh_helper(new_validation_time_steps, self.validation_time_steps)
 
             if not self.fast:
                 self.save_games()
 
+    def refresh_helper(self, new_points, old_points):
+        # always remove 10% of the games
+        # running keep 160 games per sampling population
+        old_remove = len(old_points) // self.replace_ratio_per_refresh
+        old_retain_num = len(old_points) - old_remove
+        old_points = random.sample(old_points, k=old_retain_num)
+        old_points= old_points + new_points
+        return old_points
+
     def save_games(self):
-        name="timesteps"
-        with open(name, "wb") as f:
-            pickle.dump(self.time_steps, f)
+        with open("training_timesteps", "wb") as f:
+            pickle.dump(self.training_time_steps, f)
+
+        with open("validation_timesteps", "wb") as f:
+            pickle.dump(self.validation_time_steps, f)
 
     def load_games(self):
-        with open("timesteps", "rb") as f:
-            self.time_steps=pickle.load(f)
+        try:
+            with open("training_timesteps", "rb") as f:
+                self.training_time_steps=pickle.load(f)
+        except FileNotFoundError:
+            print("Training timestep absent from loading")
+
+        try:
+            with open("validation_timesteps", "rb") as f:
+                self.validation_time_steps=pickle.load(f)
+        except FileNotFoundError:
+            print("Validation timestep absent from loading")
 
     def train(self):
         dqlen=50
@@ -229,7 +276,7 @@ class AlphaZero:
             try:
                 assert(ts.logits.shape[0]==len(ts.children_states))
             except AssertionError:
-                for tsidx, ts in enumerate(az.time_steps):
+                for tsidx, ts in enumerate(az.training_time_steps):
                     if ts.logits is not None:
                         if ts.logits.shape[0]!=len(ts.children_states):
                             print(tsidx)
@@ -290,7 +337,7 @@ class AlphaZero:
     def train_one_round(self):
         self.nn.train()
         # sample self.batch_size number of time steps, bundle them together
-        sampled_tss = random.sample(self.time_steps, k=self.training_time_step_batch_size)
+        sampled_tss = random.sample(self.training_time_steps, k=self.training_validation_time_step_batch_size)
         vloss, ploss, pdiff = self.run_one_round(sampled_tss)
         loss=vloss+ploss
         loss.backward()
@@ -314,23 +361,9 @@ class AlphaZero:
         with torch.no_grad():
             self.nn.eval()
             # sample self.batch_size number of time steps, bundle them together
-            sampled_tss = random.sample(self.time_steps, k=self.training_time_step_batch_size)
+            sampled_tss = random.sample(self.validation_time_steps, k=self.training_validation_time_step_batch_size)
             vloss, ploss, pdiff = self.run_one_round(sampled_tss)
         return vloss.item(), ploss.item(), pdiff
-
-    def time_steps_to_tensor(self, batch_tss):
-        # what is the strategy for training time neural network call?
-        # I suppose we should do one pass on all values, then we do passes over the probabilities
-        # sometimes a batch represent different time steps
-        # sometimes a batch represents the same time step but different children of the time step
-        # cast and view bonanza.
-        # keep track of the loss coefficient.
-        # beware not to keep too many boards in the memory at once: when doing probability, do n boards at once
-
-        # compatible with our next design that the probability head is independent from value head, but no other
-        # design compatibility
-
-        return None
 
     def log_print(self, message):
         string = str(message)
@@ -408,67 +441,6 @@ class AlphaZero:
 def datetime_filename():
     return datetime.datetime.now().strftime("%m-%d-%H-%M-%S")
 
-# spread more work to main thread
-# def gpu_thread_worker(nn, edge_queue, eval_batch_size, is_cuda):
-#     while True:
-#         with torch.no_grad():
-#             nn.eval()
-#             edges = []
-#             last_batch = False
-#             for i in range(eval_batch_size):
-#                 if edge_queue.empty():
-#                     break
-#                 try:
-#                     edge = edge_queue.get_nowait()
-#                     if edge is None:
-#                         last_batch = True
-#                         # print("Sentinel received. GPU will process this batch and terminate afterwards")
-#                     else:
-#                         edges.append(edge)
-#                 except queue.Empty:
-#                     pass
-#
-#             if len(edges) != 0:
-#                 # batch process
-#                 states = [edge.to_node.checker_state for edge in edges]
-#                 input_tensor = states_to_batch_tensor(states, is_cuda)
-#                 # this line is the bottleneck
-#                 if isinstance(nn, YesPolicy):
-#                     value_tensor, logits_tensor = nn(input_tensor)
-#
-#                 else:
-#                     value_tensor = nn(input_tensor)
-#
-#                 # # value
-#                 # value_array = value_tensor.cpu().numpy()
-#                 # value_array = np.squeeze(value_array, axis=1)
-#                 # value_list = value_array.tolist()
-#                 # if isinstance(nn, YesPolicy):
-#                 #     # logits
-#                 #     logit_array = logits_tensor.cpu().numpy()
-#                 #     logit_array = np.squeeze(logit_array, axis=1)
-#                 #     logit_list = logit_array.tolist()
-#                 # else:
-#                 #     logit_list = value_list
-#
-#                 for edx, edge in enumerate(edges):
-#                     edge.value = value_tensor[edx, 0].item()
-#                     if isinstance(nn, YesPolicy):
-#                         edge.logit = logits_tensor[edx,0].item()
-#                     else:
-#                         edge.logit = value_tensor[edx,0].item()
-#                     edge_queue.task_done()
-#                     edge.from_node.unassigned -= 1
-#                     if edge.from_node.unassigned == 0:
-#                         edge.from_node.lock.release()
-#             else:
-#                 time.sleep(0.1)
-#
-#             if last_batch:
-#                 edge_queue.task_done()
-#                 # print("Queue task done signal sent. Queue will join. Thread may still be running.")
-#                 return
-
 
 
 def gpu_thread_worker(nn, edge_queue, eval_batch_size, is_cuda):
@@ -505,18 +477,6 @@ def gpu_thread_worker(nn, edge_queue, eval_batch_size, is_cuda):
 
                 if isinstance(nn, YesPolicy):
                     logits_tensor=value_tensor
-
-                # value
-                # value_array = value_tensor.cpu().numpy()
-                # value_array = np.squeeze(value_array, axis=1)
-                # value_list = value_array.tolist()
-                # if isinstance(nn, YesPolicy):
-                #     # logits
-                #     logit_array = logits_tensor.cpu().numpy()
-                #     logit_array = np.squeeze(logit_array, axis=1)
-                #     logit_list = logit_array.tolist()
-                # else:
-                #     logit_list = value_list
 
                 for edx, edge in enumerate(edges):
                     edge.value = value_tensor[edx,0]
