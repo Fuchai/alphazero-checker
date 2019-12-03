@@ -162,7 +162,7 @@ class MCTS:
             pi[maxedx] = 1
             max_action = root.edges[maxedx]
             self.permaTree.move_root(max_action.to_node)
-        if self.permaTree.last_capture == 40:
+        if self.permaTree.last_capture == 100:
             print("Terminated due to peaceful activity")
             return 2
 
@@ -297,7 +297,7 @@ class MCTS:
         self.permaTree.root.checker_state.print_board()
 
     def puct_scheduler(self,epoch):
-        self.puct=4
+        self.puct=1/2
 
 # interfaces with the Zero
 class TimeStep:

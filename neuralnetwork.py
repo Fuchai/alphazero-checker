@@ -118,8 +118,7 @@ class NoPolicy(Model):
 
 
 class YesPolicy(Model):
-    def __init__(self):
-        scale = 512
+    def __init__(self, scale):
         tower_len = 9
         super(YesPolicy, self).__init__()
         self.conv1 = nn.Conv2d(4, scale, 3, padding=1)
@@ -177,6 +176,57 @@ class YesPolicy(Model):
         return p2, v2
 
 
+class SharedPolicy(Model):
+    def __init__(self, scale):
+        tower_len = 9
+        super(SharedPolicy, self).__init__()
+        self.conv1 = nn.Conv2d(4, scale, 3, padding=1)
+        self.bn1 = nn.BatchNorm2d(scale)
+        self.tower = nn.ModuleList([ResBlock(scale)] * tower_len)
+        self.policy_linear_1 = nn.Linear(1 * 8 * 8, scale * 2)
+        self.policy_linear_2 = nn.Linear(scale * 2, 1)
+        self.value_linear_1 = nn.Linear(1 * 8 * 8, scale * 2)
+        self.value_linear_2 = nn.Linear(scale * 2, 1)
+
+        self.shared_head = nn.Sequential(
+            nn.Conv2d(scale, 1, 1),
+            nn.BatchNorm2d(1),
+            nn.ReLU(),
+        )
+        self.weights_init()
+
+    def forward(self, input_tensor):
+        """
+        the (p,v)=f_theta(s) function
+        f_theta=NeuralNetwork()
+        p,v=f_theta(state)
+
+        A second design
+
+        :param input_tensor: a batch tensor
+        :return: policy logits, not probability
+                 value
+        """
+        out = self.conv1(input_tensor)
+        out1 = self.bn1(out)
+        out2 = torch.relu(out1)
+        for res in self.tower:
+            out3 = res(out2)
+
+        v = self.shared_head(out3)
+        v1 = v.reshape(v.shape[0], -1)
+
+        p2 = self.policy_linear_1(v1)
+        p2 = torch.relu(p2)
+        p2 = self.policy_linear_2(p2)
+
+        v2 = self.value_linear_1(v1)
+        v2 = torch.relu(v2)
+        v2 = self.value_linear_2(v2)
+        v2 = torch.tanh(v2)
+        return p2, v2
+
+
 class PaperLoss(nn.Module):
     def __init__(self):
         super(PaperLoss, self).__init__()
@@ -200,7 +250,7 @@ class PaperLoss(nn.Module):
         ret1 = self.l1(v, z)
         ret2 = - torch.sum(pi * lsm)
         # I collect the l1 p difference because the ret2 is not interpretable due to variable dimensions
-        ret3 = (self.sm(logit_p)-pi).abs().mean().item()
+        ret3 = (self.sm(logit_p) - pi).abs().mean().item()
         return ret1, ret2, ret3
 
 

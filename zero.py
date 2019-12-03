@@ -6,7 +6,7 @@
 from collections import deque
 from multiprocessing.pool import ThreadPool, Pool
 from mcts import MCTS, TimeStep
-from neuralnetwork import NoPolicy, PaperLoss, YesPolicy
+from neuralnetwork import NoPolicy, PaperLoss, YesPolicy, SharedPolicy
 import random
 import torch
 import torch.optim
@@ -21,7 +21,7 @@ import time
 import queue
 import threading
 import pickle
-
+import math
 
 class AlphaZero:
     """
@@ -33,7 +33,9 @@ class AlphaZero:
     def __init__(self, model_name, is_cuda=True):
         # NEURAL NETWORK
         self.model_name = model_name
-        self.nn = YesPolicy()
+        self.scale=128
+
+        self.nn = SharedPolicy(self.scale)
         self.is_cuda = is_cuda
         if self.is_cuda:
             self.nn = self.nn.cuda()
@@ -41,28 +43,30 @@ class AlphaZero:
         self.optim = torch.optim.Adam(self.nn.parameters(), weight_decay=0.01)
         # control how many time steps each loss.backwards() is called for.
         # controls the GPU memory allocation
-        self.time_step_sample_size = 256
+        self.time_step_sample_size = 1024
         # controls how many boards is fed into a neural network at once
         # controls the GPU utilization.
-        self.nn_feeding_batch_size = 128
+        self.nn_feeding_batch_size = 512
         # time steps contain up to self.game_size different games.
         self.training_time_steps = []
         self.validation_time_steps = []
-        self.training_games_per_refresh = 7
-        self.validation_games_per_refresh = 1
+        game_sacle=2
+        self.training_games_per_refresh = 7*game_sacle
+        self.validation_games_per_refresh = game_sacle
         # controls the variance versus the training speed,
         # higher means lower variance but slower training convergence due to bias
-        self.replace_ratio_per_refresh = 10
+        # TODO lower this to 3
+        self.replace_ratio_per_refresh = 3
+        self.value_policy_backward_coeff=10
 
         self.total_game_refresh = 200
-        self.reuse_game_interval = 1024000 // self.time_step_sample_size
+        self.sample_batches_per_epoch = 102400 // self.time_step_sample_size * game_sacle
         self.validation_period = 2000
         self.total_validation_batches = 40
         self.print_period = 10
         self.save_period = 1000
         self.log_file = "log/" + self.model_name + "_" + datetime_filename() + ".txt"
         self.log_file = Path(self.log_file)
-        self.refresh_period = 10
 
         # Pass to MCTS and other methods
         self.max_game_length = 200
@@ -72,10 +76,10 @@ class AlphaZero:
         self.debug = True
         self.max_queue_size = self.eval_batch_size * 2
 
-        self.seed = 123
-        random.seed(self.seed)
-        np.random.seed(self.seed)
-        torch.manual_seed(self.seed)
+        # self.seed = 123
+        # random.seed(self.seed)
+        # np.random.seed(self.seed)
+        # torch.manual_seed(self.seed)
 
         self.fast = False
         if self.fast:
@@ -111,7 +115,7 @@ class AlphaZero:
 
             # 8 thread MCTS search
             ars = []
-            mcts_pool = ThreadPool(processes=8)
+            mcts_pool = ThreadPool(processes=self.training_games_per_refresh+self.validation_games_per_refresh)
             for i in range(self.training_games_per_refresh):
                 async_result = mcts_pool.apply_async(mcts_search_worker, args=(nn_thread_edge_queue,
                                                                                self.nn, self.is_cuda,
@@ -143,7 +147,7 @@ class AlphaZero:
             if self.debug:
                 print("GPU Thread has joined")
             # new_time_steps += mcts.time_steps
-            print("Successful generation of many games?")
+            print("Successful generation of", self.validation_games_per_refresh+self.training_games_per_refresh,"games")
             print("Queue empty:", nn_thread_edge_queue.empty())
             # check if any time step do not have children
             new_train_time_steps = [ts for ts in new_train_time_steps if len(ts.children_states) != 0]
@@ -209,14 +213,15 @@ class AlphaZero:
         vdq = deque(maxlen=dqlen)
         ptq = deque(maxlen=dqlen)
         pdiffdq = deque(maxlen=dqlen)
+        first_run=True
         for epoch in range(self.starting_epoch, self.total_game_refresh):
             if not self.fast:
                 self.load_games()
-                if epoch!=0:
+                if not first_run or epoch==0:
                     self.mcts_add_game(epoch)
             else:
                 self.load_games()
-            for ti in range(self.starting_iteration, self.reuse_game_interval):
+            for ti in range(self.starting_iteration, self.sample_batches_per_epoch):
                 train_vloss, train_ploss, pdiff = self.train_one_round()
                 vdq.append(train_vloss)
                 ptq.append(train_ploss)
@@ -224,24 +229,26 @@ class AlphaZero:
                 if ti % self.print_period == 0:
                     self.log_print(
                         "%14s " % self.model_name +
-                        "train epoch %4d, batch %4d. running value loss: %.5f. running policy loss: %.5f. "
+                        "train epoch %4d, resampling %4d. running value loss: %.5f. running policy loss: %.5f. "
                         "running p diff: %.5f" %
                         (epoch, ti, sum(vdq) / len(vdq), sum(ptq) / len(ptq), sum(pdiffdq) / len(pdiffdq)))
                 if ti % self.validation_period == 0:
                     valid_vloss, valid_ploss, valid_pdiff = self.validate()
                     self.log_print(
                         "%14s " % self.model_name +
-                        "valid epoch %4d, batch %4d. validation value loss: %.5f. validation policy loss: %.5f "
+                        "valid epoch %4d, resampling %4d. validation value loss: %.5f. validation policy loss: %.5f "
                         "validation p diff: %.5f" %
                         (epoch, ti, valid_vloss, valid_ploss, valid_pdiff))
                 if ti % self.save_period == 0:
                     self.save_model(epoch, ti)
+            self.starting_iteration=0
+            first_run=False
 
     def run_one_round(self, sampled_tss):
         # compile value tensor
         values={}
 
-        value_batches = len(sampled_tss) // self.nn_feeding_batch_size
+        value_batches = math.ceil(len(sampled_tss) / self.nn_feeding_batch_size)
         for batch_idx in range(value_batches):
             batch_tss = sampled_tss[
                         batch_idx * self.nn_feeding_batch_size: (batch_idx + 1) * self.nn_feeding_batch_size]
@@ -249,7 +256,7 @@ class AlphaZero:
             value_tensor = states_to_batch_tensor(value_inputs, is_cuda=self.is_cuda)
             _, value_output = self.nn(value_tensor)
             for tsidx, ts in enumerate(batch_tss):
-                ts.v = value_output[tsidx]
+                # ts.v = value_output[tsidx]
                 values[ts]=value_output[tsidx]
 
         # compile policy tensor
@@ -355,7 +362,8 @@ class AlphaZero:
         except ValueError:
             sampled_tss = self.training_time_steps
         vloss, ploss, pdiff = self.run_one_round(sampled_tss)
-        loss = vloss + ploss
+
+        loss = self.value_policy_backward_coeff*vloss + ploss
         loss.backward()
         self.optim.step()
         return vloss.item(), ploss.item(), pdiff
@@ -489,13 +497,13 @@ def gpu_thread_worker(nn, edge_queue, eval_batch_size, is_cuda):
                 states = [edge.to_node.checker_state for edge in edges]
                 input_tensor = states_to_batch_tensor(states, is_cuda)
                 # this line is the bottleneck
-                if isinstance(nn, YesPolicy):
+                if isinstance(nn, YesPolicy) or isinstance(nn, SharedPolicy):
                     value_tensor, logits_tensor = nn(input_tensor)
 
                 else:
                     value_tensor = nn(input_tensor)
 
-                if isinstance(nn, YesPolicy):
+                if isinstance(nn, YesPolicy) or isinstance(nn, SharedPolicy):
                     logits_tensor = value_tensor
 
                 for edx, edge in enumerate(edges):
@@ -525,5 +533,5 @@ def mcts_search_worker(nn_thread_edge_queue, nn, is_cuda, max_game_length, simul
 
 
 if __name__ == '__main__':
-    az = AlphaZero("retrain", is_cuda=True)
+    az = AlphaZero("value10", is_cuda=True)
     az.train()
