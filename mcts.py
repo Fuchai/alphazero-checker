@@ -31,6 +31,7 @@ class MCTS:
         self.is_cuda = is_cuda
         self.simulations_per_play = simulations_per_play
         self.debug=debug
+        print("MCTS debug: "+self.debug)
 
     def play_until_terminal(self):
         """
@@ -241,6 +242,10 @@ class MCTS:
                 print(node.is_root())
             Usa = (self.puct * edge.prior_probability * math.sqrt(sumnsb)) / (1 + Nsa)
             QU.append(edge.mean_action_value + Usa)
+            # if edge.is_first_player():
+            #     QU.append(edge.mean_action_value + Usa)
+            # else:
+            #     QU.append(-edge.mean_action_value+ Usa)
 
         # pick the edge that is returned by the argmax and return it
         # make it node
@@ -282,14 +287,19 @@ class MCTS:
         trace back the whole path from given node till root node while updating edges on the path
 
         :param leaf_node:
+        :param v: the leaf's perspective value, accessed from leaf_node.from_edge
         :return:
         """
         # parent of root node is null
         current_node = leaf_node
+        leaf_first_player=leaf_node.is_first_player()
         while current_node.parent is not None:
             edge = current_node.from_edge
             edge.visit_count = edge.visit_count + 1
-            edge.total_action_value = edge.total_action_value + v
+            if edge.to_node.is_first_player()==leaf_first_player:
+                edge.total_action_value = edge.total_action_value - v
+            else:
+                edge.total_action_value = edge.total_action_value + v
             edge.mean_action_value = edge.total_action_value / edge.visit_count
             current_node = edge.from_node
 

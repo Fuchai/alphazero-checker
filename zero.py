@@ -219,9 +219,9 @@ class AlphaZero:
         first_run=True
         for epoch in range(self.starting_epoch, self.total_game_refresh):
             if not self.fast:
-                self.load_games()
-                if not first_run:
-                    self.mcts_add_game(epoch)
+                # self.load_games()
+                # if not first_run:
+                self.mcts_add_game(epoch)
             else:
                 self.load_games()
             for ti in range(self.starting_iteration, self.sample_batches_per_epoch):
@@ -536,5 +536,5 @@ def mcts_search_worker(nn_thread_edge_queue, nn, is_cuda, max_game_length, simul
 
 
 if __name__ == '__main__':
-    az = AlphaZero("value10", is_cuda=True)
+    az = AlphaZero("alternate", is_cuda=True)
     az.train()
