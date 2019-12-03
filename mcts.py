@@ -31,7 +31,6 @@ class MCTS:
         self.is_cuda = is_cuda
         self.simulations_per_play = simulations_per_play
         self.debug=debug
-        print("MCTS debug: "+self.debug)
 
     def play_until_terminal(self):
         """
