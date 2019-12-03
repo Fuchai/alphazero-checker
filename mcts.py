@@ -297,7 +297,7 @@ class MCTS:
         self.permaTree.root.checker_state.print_board()
 
     def puct_scheduler(self,epoch):
-        self.puct=1/2
+        self.puct=4
 
 # interfaces with the Zero
 class TimeStep:

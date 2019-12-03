@@ -55,11 +55,13 @@ class AlphaZero:
         self.validation_games_per_refresh = game_sacle
         # controls the variance versus the training speed,
         # higher means lower variance but slower training convergence due to bias
-        # TODO lower this to 3
-        self.replace_ratio_per_refresh = 3
-        self.value_policy_backward_coeff=10
+
+        # variance is too big. The epochs oscillate between modes
+        self.replace_ratio_per_refresh = 1/10
+        self.value_policy_backward_coeff= 10
 
         self.total_game_refresh = 200
+        # if training too much, the model might diverge.
         self.sample_batches_per_epoch = 102400 // self.time_step_sample_size * game_sacle
         self.validation_period = 2000
         self.total_validation_batches = 40
@@ -76,6 +78,7 @@ class AlphaZero:
         self.debug = True
         self.max_queue_size = self.eval_batch_size * 2
 
+        # if seeds are set incorrectly, the model might diverge
         # self.seed = 123
         # random.seed(self.seed)
         # np.random.seed(self.seed)
@@ -182,7 +185,7 @@ class AlphaZero:
     def refresh_helper(self, new_points, old_points):
         # always remove 10% of the games
         # running keep 160 games per sampling population
-        old_remove = len(old_points) // self.replace_ratio_per_refresh
+        old_remove = int(len(old_points) * self.replace_ratio_per_refresh)
         old_retain_num = len(old_points) - old_remove
         old_points = random.sample(old_points, k=old_retain_num)
         old_points = old_points + new_points
@@ -217,7 +220,7 @@ class AlphaZero:
         for epoch in range(self.starting_epoch, self.total_game_refresh):
             if not self.fast:
                 self.load_games()
-                if not first_run or epoch==0:
+                if not first_run:
                     self.mcts_add_game(epoch)
             else:
                 self.load_games()
