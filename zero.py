@@ -71,7 +71,8 @@ class AlphaZero:
         self.log_file = Path(self.log_file)
 
         # Pass to MCTS and other methods
-        self.max_game_length = 200
+        self.max_game_length = 300
+        self.peace=150
         self.simulations_per_play = 200
         # this is a tuned parameter, do not change
         self.eval_batch_size = 409600 // self.simulations_per_play
@@ -123,6 +124,7 @@ class AlphaZero:
                 async_result = mcts_pool.apply_async(mcts_search_worker, args=(nn_thread_edge_queue,
                                                                                self.nn, self.is_cuda,
                                                                                self.max_game_length,
+                                                                               self.peace,
                                                                                self.simulations_per_play,
                                                                                self.debug, epoch, new_train_time_steps))
                 ars.append(async_result)
@@ -130,6 +132,7 @@ class AlphaZero:
                 async_result = mcts_pool.apply_async(mcts_search_worker, args=(nn_thread_edge_queue,
                                                                                self.nn, self.is_cuda,
                                                                                self.max_game_length,
+                                                                               self.peace,
                                                                                self.simulations_per_play,
                                                                                self.debug, epoch,
                                                                                new_validation_time_steps))

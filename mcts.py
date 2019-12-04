@@ -17,7 +17,7 @@ class MCTS:
     page 2 right column paragraph 1).
     """
 
-    def __init__(self, nn_execution_queue, nn, is_cuda, max_game_length, simulations_per_play, debug):
+    def __init__(self, nn_execution_queue, nn, is_cuda, max_game_length, peace, simulations_per_play, debug):
         self.checker = Checker()
         self.permaTree = PermaTree(self.checker, is_cuda)
         self.nn_queue = nn_execution_queue
@@ -27,6 +27,7 @@ class MCTS:
         self.temperature_change_at = 30
         self.puct = None
         self.max_game_length = max_game_length
+        self.peace = peace
         self.time_steps = []
         self.is_cuda = is_cuda
         self.simulations_per_play = simulations_per_play
@@ -65,7 +66,6 @@ class MCTS:
         # final_state = self.permaTree.root.checker_state
         # outcome = final_state.evaluate()
         #
-        # # TODO not continuous outcome currently
         # if outcome == 0:
         #     z = 0
         # else:
@@ -162,7 +162,7 @@ class MCTS:
             pi[maxedx] = 1
             max_action = root.edges[maxedx]
             self.permaTree.move_root(max_action.to_node)
-        if self.permaTree.last_capture == 100:
+        if self.permaTree.last_capture == self.peace:
             print("Terminated due to peaceful activity")
             return 2
 
@@ -306,7 +306,7 @@ class MCTS:
         self.permaTree.root.checker_state.print_board()
 
     def puct_scheduler(self,epoch):
-        self.puct=4
+        self.puct=1/2
 
 # interfaces with the Zero
 class TimeStep:
