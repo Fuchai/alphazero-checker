@@ -23,6 +23,7 @@ import threading
 import pickle
 import math
 
+
 class AlphaZero:
     """
     Use MCTS to generate g number of games
@@ -33,7 +34,7 @@ class AlphaZero:
     def __init__(self, model_name, is_cuda=True):
         # NEURAL NETWORK
         self.model_name = model_name
-        self.scale=128
+        self.scale = 128
 
         self.nn = SharedPolicy(self.scale)
         self.is_cuda = is_cuda
@@ -50,15 +51,17 @@ class AlphaZero:
         # time steps contain up to self.game_size different games.
         self.training_time_steps = []
         self.validation_time_steps = []
-        game_sacle=2
-        self.training_games_per_refresh = 7*game_sacle
+        # determines the CPU memory consumption
+        game_sacle = 2
+        self.training_games_per_refresh = 7 * game_sacle
         self.validation_games_per_refresh = game_sacle
         # controls the variance versus the training speed,
         # higher means lower variance but slower training convergence due to bias
+        print("Total threads: ", self.training_games_per_refresh+self.validation_games_per_refresh)
 
         # variance is too big. The epochs oscillate between modes
-        self.replace_ratio_per_refresh = 1/10
-        self.value_policy_backward_coeff= 10
+        self.replace_ratio_per_refresh = 1 / 10
+        self.value_policy_backward_coeff = 1
 
         self.total_game_refresh = 200
         # if training too much, the model might diverge.
@@ -71,11 +74,13 @@ class AlphaZero:
         self.log_file = Path(self.log_file)
 
         # Pass to MCTS and other methods
-        self.max_game_length = 300
-        self.peace=150
+        self.max_game_length = 200
+        self.peace = 100
         self.simulations_per_play = 200
         # this is a tuned parameter, do not change
-        self.eval_batch_size = 409600 // self.simulations_per_play
+        # 4096 memory bound
+        self.eval_batch_size = 819200 // self.simulations_per_play
+        print("GPU memory batches:", self.eval_batch_size)
         self.debug = True
         self.max_queue_size = self.eval_batch_size * 2
 
@@ -111,15 +116,15 @@ class AlphaZero:
                                           args=(self.nn, nn_thread_edge_queue, self.eval_batch_size, self.is_cuda))
             gpu_thread.start()
 
-            # mcts = MCTS(nn_thread_edge_queue, self.nn, self.is_cuda,
-            #             self.max_game_length, self.simulations_per_play,
-            #             self.debug)
-            # mcts.puct_scheduler(epoch)
-            # mcts.play_until_terminal()
-
             # 8 thread MCTS search
             ars = []
-            mcts_pool = ThreadPool(processes=self.training_games_per_refresh+self.validation_games_per_refresh)
+            mcts_pool = ThreadPool(processes=self.training_games_per_refresh + self.validation_games_per_refresh)
+            # mcts_search_worker(nn_thread_edge_queue,
+            #                    self.nn, self.is_cuda,
+            #                    self.max_game_length,
+            #                    self.peace,
+            #                    self.simulations_per_play,
+            #                    self.debug, epoch, new_train_time_steps)
             for i in range(self.training_games_per_refresh):
                 async_result = mcts_pool.apply_async(mcts_search_worker, args=(nn_thread_edge_queue,
                                                                                self.nn, self.is_cuda,
@@ -153,7 +158,8 @@ class AlphaZero:
             if self.debug:
                 print("GPU Thread has joined")
             # new_time_steps += mcts.time_steps
-            print("Successful generation of", self.validation_games_per_refresh+self.training_games_per_refresh,"games")
+            print("Successful generation of", self.validation_games_per_refresh + self.training_games_per_refresh,
+                  "games")
             print("Queue empty:", nn_thread_edge_queue.empty())
             # check if any time step do not have children
             new_train_time_steps = [ts for ts in new_train_time_steps if len(ts.children_states) != 0]
@@ -195,6 +201,8 @@ class AlphaZero:
         return old_points
 
     def save_games(self):
+        if len(self.training_time_steps)==0:
+            raise ValueError()
         with open("training_timesteps", "wb") as f:
             pickle.dump(self.training_time_steps, f)
 
@@ -205,6 +213,7 @@ class AlphaZero:
         try:
             with open("training_timesteps", "rb") as f:
                 self.training_time_steps = pickle.load(f)
+                print("games loaded")
         except FileNotFoundError:
             print("Training timestep absent from loading")
 
@@ -219,10 +228,10 @@ class AlphaZero:
         vdq = deque(maxlen=dqlen)
         ptq = deque(maxlen=dqlen)
         pdiffdq = deque(maxlen=dqlen)
-        first_run=True
+        first_run = True
         for epoch in range(self.starting_epoch, self.total_game_refresh):
             if not self.fast:
-                # self.load_games()
+                self.load_games()
                 # if not first_run:
                 self.mcts_add_game(epoch)
             else:
@@ -247,12 +256,12 @@ class AlphaZero:
                         (epoch, ti, valid_vloss, valid_ploss, valid_pdiff))
                 if ti % self.save_period == 0:
                     self.save_model(epoch, ti)
-            self.starting_iteration=0
-            first_run=False
+            self.starting_iteration = 0
+            first_run = False
 
     def run_one_round(self, sampled_tss):
         # compile value tensor
-        values={}
+        values = {}
 
         value_batches = math.ceil(len(sampled_tss) / self.nn_feeding_batch_size)
         for batch_idx in range(value_batches):
@@ -263,7 +272,7 @@ class AlphaZero:
             _, value_output = self.nn(value_tensor)
             for tsidx, ts in enumerate(batch_tss):
                 # ts.v = value_output[tsidx]
-                values[ts]=value_output[tsidx]
+                values[ts] = value_output[tsidx]
 
         # compile policy tensor
         # queue up children_states
@@ -272,7 +281,7 @@ class AlphaZero:
 
         policy_inputs_queue = []
         dim_ts = []
-        logits={}
+        logits = {}
         for tsidx, ts in enumerate(sampled_tss):
             logits[ts] = []
             # if ts is az.training_time_steps[3336]:
@@ -369,7 +378,7 @@ class AlphaZero:
             sampled_tss = self.training_time_steps
         vloss, ploss, pdiff = self.run_one_round(sampled_tss)
 
-        loss = self.value_policy_backward_coeff*vloss + ploss
+        loss = self.value_policy_backward_coeff * vloss + ploss
         loss.backward()
         self.optim.step()
         return vloss.item(), ploss.item(), pdiff
@@ -528,10 +537,10 @@ def gpu_thread_worker(nn, edge_queue, eval_batch_size, is_cuda):
                 return
 
 
-def mcts_search_worker(nn_thread_edge_queue, nn, is_cuda, max_game_length, simulations_per_play,
+def mcts_search_worker(nn_thread_edge_queue, nn, is_cuda, max_game_length, peace, simulations_per_play,
                        debug, epoch, new_time_steps):
     mcts = MCTS(nn_thread_edge_queue, nn, is_cuda,
-                max_game_length, simulations_per_play,
+                max_game_length, peace, simulations_per_play,
                 debug)
     mcts.puct_scheduler(epoch)
     mcts.play_until_terminal()
@@ -539,5 +548,10 @@ def mcts_search_worker(nn_thread_edge_queue, nn, is_cuda, max_game_length, simul
 
 
 if __name__ == '__main__':
-    az = AlphaZero("alternate", is_cuda=True)
+    az = AlphaZero("highpuctshortgame28", is_cuda=True)
     az.train()
+
+# fork alternate is longer games, value coef = 1
+# longer game does not seem to work. All the games now look the same? The loss diverges?
+
+# high puct highpuctshortgame28

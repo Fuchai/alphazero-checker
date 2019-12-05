@@ -248,6 +248,12 @@ class MCTS:
 
         # pick the edge that is returned by the argmax and return it
         # make it node
+        if node.is_root():
+            epsilon=0.25
+            d_samples=np.random.dirichlet((0.03,)*len(QU)).tolist()
+            for quidx in range(len(QU)):
+                QU[quidx]=QU[quidx]*(1-epsilon)+d_samples[quidx]*epsilon
+
         maxqu = -float('inf')
         maxedx = None
         for edx, qu in enumerate(QU):
@@ -306,7 +312,7 @@ class MCTS:
         self.permaTree.root.checker_state.print_board()
 
     def puct_scheduler(self,epoch):
-        self.puct=1/2
+        self.puct=20
 
 # interfaces with the Zero
 class TimeStep:
