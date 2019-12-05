@@ -17,7 +17,7 @@ class MCTS:
     page 2 right column paragraph 1).
     """
 
-    def __init__(self, nn_execution_queue, nn, is_cuda, max_game_length, simulations_per_play, debug):
+    def __init__(self, nn_execution_queue, nn, is_cuda, max_game_length, peace, simulations_per_play, debug):
         self.checker = Checker()
         self.permaTree = PermaTree(self.checker, is_cuda)
         self.nn_queue = nn_execution_queue
@@ -27,6 +27,7 @@ class MCTS:
         self.temperature_change_at = 30
         self.puct = None
         self.max_game_length = max_game_length
+        self.peace = peace
         self.time_steps = []
         self.is_cuda = is_cuda
         self.simulations_per_play = simulations_per_play
@@ -65,7 +66,6 @@ class MCTS:
         # final_state = self.permaTree.root.checker_state
         # outcome = final_state.evaluate()
         #
-        # # TODO not continuous outcome currently
         # if outcome == 0:
         #     z = 0
         # else:
@@ -162,7 +162,7 @@ class MCTS:
             pi[maxedx] = 1
             max_action = root.edges[maxedx]
             self.permaTree.move_root(max_action.to_node)
-        if self.permaTree.last_capture == 40:
+        if self.permaTree.last_capture == self.peace:
             print("Terminated due to peaceful activity")
             return 2
 
@@ -241,9 +241,19 @@ class MCTS:
                 print(node.is_root())
             Usa = (self.puct * edge.prior_probability * math.sqrt(sumnsb)) / (1 + Nsa)
             QU.append(edge.mean_action_value + Usa)
+            # if edge.is_first_player():
+            #     QU.append(edge.mean_action_value + Usa)
+            # else:
+            #     QU.append(-edge.mean_action_value+ Usa)
 
         # pick the edge that is returned by the argmax and return it
         # make it node
+        if node.is_root():
+            epsilon=0.25
+            d_samples=np.random.dirichlet((0.03,)*len(QU)).tolist()
+            for quidx in range(len(QU)):
+                QU[quidx]=QU[quidx]*(1-epsilon)+d_samples[quidx]*epsilon
+
         maxqu = -float('inf')
         maxedx = None
         for edx, qu in enumerate(QU):
@@ -282,14 +292,19 @@ class MCTS:
         trace back the whole path from given node till root node while updating edges on the path
 
         :param leaf_node:
+        :param v: the leaf's perspective value, accessed from leaf_node.from_edge
         :return:
         """
         # parent of root node is null
         current_node = leaf_node
+        leaf_first_player=leaf_node.is_first_player()
         while current_node.parent is not None:
             edge = current_node.from_edge
             edge.visit_count = edge.visit_count + 1
-            edge.total_action_value = edge.total_action_value + v
+            if edge.to_node.is_first_player()==leaf_first_player:
+                edge.total_action_value = edge.total_action_value - v
+            else:
+                edge.total_action_value = edge.total_action_value + v
             edge.mean_action_value = edge.total_action_value / edge.visit_count
             current_node = edge.from_node
 
@@ -297,7 +312,7 @@ class MCTS:
         self.permaTree.root.checker_state.print_board()
 
     def puct_scheduler(self,epoch):
-        self.puct=4
+        self.puct=20
 
 # interfaces with the Zero
 class TimeStep:

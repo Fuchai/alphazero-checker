@@ -62,7 +62,6 @@ class PermaEdge:
         self.value = value.cpu().numpy().tolist()[0][0]
         return value
 
-
 class PermaNode:
     """
     Guarantees that from_edge is not None. May not have self.edges
@@ -139,3 +138,5 @@ class PermaNode:
         #     edge.prior_probability = npp[edx]
 
 
+    def is_first_player(self):
+        return not self.checker_state.flipped
