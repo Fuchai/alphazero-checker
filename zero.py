@@ -466,14 +466,14 @@ class AlphaZero:
                 "saves/" + self.model_name + "_" + str(highest_epoch) + "_" + str(highest_iter) + ".pkl")
             print("loading model at", pickle_file)
             with pickle_file.open('rb') as pickle_file:
-                computer, optim, epoch, iteration = torch.load(pickle_file)
+                computer, optim, epoch, iteration = torch.load(pickle_file,map_location=torch.device('cpu'))
             print('Loaded model at epoch ', highest_epoch, 'iteration', highest_iter)
         else:
             pickle_file = Path(task_dir).joinpath(
                 "saves/" + self.model_name + "_" + str(starting_epoch) + "_" + str(starting_iteration) + ".pkl")
             print("loading model at", pickle_file)
             with pickle_file.open('rb') as pickle_file:
-                computer, optim, epoch, iteration = torch.load(pickle_file)
+                computer, optim, epoch, iteration = torch.load(pickle_file,map_location=torch.device('cpu'))
             print('Loaded model at epoch ', starting_epoch, 'iteration', starting_iteration)
 
         self.nn.load_state_dict(computer)
@@ -548,7 +548,7 @@ def mcts_search_worker(nn_thread_edge_queue, nn, is_cuda, max_game_length, peace
 
 
 if __name__ == '__main__':
-    az = AlphaZero("highpuctshortgame28", is_cuda=True)
+    az = AlphaZero("highpuctshortgame28", is_cuda=False)
     az.train()
 
 # fork alternate is longer games, value coef = 1
