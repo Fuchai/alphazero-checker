@@ -118,6 +118,11 @@ class PermaNode:
             self.unassigned+=1
             nn_queue.put(edge)
 
+    def find_child(self, state):
+        for child in [e.to_node for e in self.edges]:
+            if child.checker_state.board_hash() == state.board_hash():
+                return child
+
         #
         # # this lock will be released when all of its children are evaluated
         # states = [edge.to_node.checker_state for edge in self.edges]
