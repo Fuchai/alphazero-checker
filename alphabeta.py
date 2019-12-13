@@ -131,6 +131,7 @@ class AlphaBeta(Checker):
             assert self.root_node.state is self.state
         if len(self.root_node.children)==0:
             self.root_node.make_children()
+        # bug with flipping incorrectly.
         child = self.root_node.find_child(human_action.get_flipped_state())
         self.root_node = child
         self.state = self.root_node.state

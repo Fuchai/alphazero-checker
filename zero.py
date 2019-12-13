@@ -542,10 +542,8 @@ def mcts_search_worker(nn_thread_edge_queue, nn, is_cuda, max_game_length, peace
     mcts = MCTS(nn_thread_edge_queue, nn, is_cuda,
                 max_game_length, peace, simulations_per_play,
                 debug)
-    mcts.puct_scheduler(epoch)
     mcts.play_until_terminal()
     new_time_steps += mcts.time_steps
-
 
 if __name__ == '__main__':
     az = AlphaZero("highpuctshortgame28", is_cuda=False)
@@ -555,3 +553,5 @@ if __name__ == '__main__':
 # longer game does not seem to work. All the games now look the same? The loss diverges?
 
 # high puct highpuctshortgame28
+# low puct = 1/2
+# alternate =4

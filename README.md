@@ -1,3 +1,11 @@
+## How to run
+### How to train?
+To train the model, your entry point is zero.py
+
+### How to self-play?
+The self play experiments can be found in performance.py
+
+
 ## How to run and develop?
 ### Anaconda 3
 Install anaconda 3
