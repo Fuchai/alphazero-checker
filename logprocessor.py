@@ -34,7 +34,6 @@ def alphabets_and_numbers(line):
 
 def process_log(file):
     dfs={}
-
     # for file in files:
     with open(file, 'r') as f:
         for line in f:

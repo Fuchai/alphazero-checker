@@ -25,7 +25,7 @@ class MCTS:
         # changes to False after the first 30 moves
         self.temperature = True
         self.temperature_change_at = 30
-        self.puct = None
+        self.puct = 20
         self.max_game_length = max_game_length
         self.peace = peace
         self.time_steps = []
@@ -117,10 +117,10 @@ class MCTS:
 
         if z == 1:
             print("First player won.")
-        elif z==-1:
+        elif z == -1:
             print("Second player won")
         else:
-            assert (z==0)
+            assert (z == 0)
             print("Draw")
 
         self.permaTree.root.checker_state.print_board()
@@ -206,11 +206,9 @@ class MCTS:
         # let's release the lock when logits are ready, but probability might not be computed
         node.lock.acquire()
         if not node.probability_ready:
-            # COMMENT THIS OUT TO USE OLD FUNCTION
             for edge in node.edges:
                 edge.value=edge.value.item()
                 edge.logit=edge.logit.item()
-            # COMMENT THIS OUT TO USE OLD FUNCTION
 
             # probability
             prob_tensor = self.nn.logits_to_probability(torch.Tensor([edge.logit for edge in node.edges]))
@@ -311,8 +309,6 @@ class MCTS:
     def print_root(self):
         self.permaTree.root.checker_state.print_board()
 
-    def puct_scheduler(self,epoch):
-        self.puct=20
 
 # interfaces with the Zero
 class TimeStep:

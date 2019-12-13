@@ -59,3 +59,5 @@ pdiff.plot<-ggplot()+
 
 ggsave("plots/pdiff.png", width=4, height=3)
 
+# value and policy
+

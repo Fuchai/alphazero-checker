@@ -542,7 +542,6 @@ def mcts_search_worker(nn_thread_edge_queue, nn, is_cuda, max_game_length, peace
     mcts = MCTS(nn_thread_edge_queue, nn, is_cuda,
                 max_game_length, peace, simulations_per_play,
                 debug)
-    mcts.puct_scheduler(epoch)
     mcts.play_until_terminal()
     new_time_steps += mcts.time_steps
 
